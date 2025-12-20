@@ -250,6 +250,12 @@ async def cleanup_temp_file(filepath: str):
     if os.path.exists(filepath):
         os.remove(filepath)
 
+@app.get("/files")
+async def list_files():
+    """List all uploaded files"""
+    files = storage.list_files_metadata()
+    return files
+
 @app.get("/file/{file_id}/status")
 async def get_file_status(file_id: str):
     """Check status of a file's shards"""

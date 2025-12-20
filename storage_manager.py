@@ -191,3 +191,12 @@ class SupabaseStorageManager:
             return json.loads(data.decode('utf-8'))
         except:
             return None
+
+    def list_files_metadata(self) -> List[Dict]:
+        """Fetch all file metadata from the database"""
+        try:
+            response = self.client.table("files").select("*").execute()
+            return response.data if response.data else []
+        except Exception as e:
+            print(f"Error listing files: {e}")
+            return []
