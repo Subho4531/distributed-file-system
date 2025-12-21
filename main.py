@@ -341,7 +341,13 @@ async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
         elif algorithm == "reed-solomon":
             k = config.get("k", 3)
             m = config.get("m", 2)
-            reconstructed = decode_file(shard_data_list, algorithm="reed-solomon", k=k, m=m)
+            original_size = metadata.get("original_size", 0)
+            reconstructed = decode_file(
+                shard_data_list, 
+                algorithm="reed-solomon", 
+                k=k, m=m, 
+                original_size=original_size
+            )
         else:
             raise HTTPException(500, f"Unknown algorithm: {algorithm}")
         
