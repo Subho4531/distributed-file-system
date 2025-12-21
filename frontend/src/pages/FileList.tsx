@@ -14,9 +14,10 @@ import {
   Trash2,
   X,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Download
 } from "lucide-react";
-import { fetchFiles, fetchFileStatus, deleteFile } from "../api/cosmeon";
+import { fetchFiles, fetchFileStatus, deleteFile, reconstructFile } from "../api/cosmeon";
 import { cn } from "../lib/utils";
 
 export default function FileList() {
@@ -27,6 +28,8 @@ export default function FileList() {
   const [statusLoading, setStatusLoading] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [reconstructing, setReconstructing] = useState<string | null>(null);
+  const [reconstructError, setReconstructError] = useState<string | null>(null);
 
   const loadFiles = () => {
     setLoading(true);
@@ -46,12 +49,54 @@ export default function FileList() {
   }, []);
 
   const getHealthStatus = (file: any) => {
-    // Basic heuristic since we don't have per-file health in the list yet
-    const isReady = file.shards && file.shards.length > 0;
+    // Enhanced heuristic based on file data
+    const hasShards = file.shards && file.shards.length > 0;
+    const algorithm = file.algorithm || file.algorithm_used;
+    
+    if (!hasShards) {
+      return {
+        label: "Unknown",
+        color: "slate",
+        icon: Activity
+      };
+    }
+
+    // For Reed-Solomon, check if we have enough shards
+    if (algorithm === "reed-solomon") {
+      const config = file.config || file.algorithm_config || {};
+      const k = config.k || 3;
+      const totalShards = file.shards.length;
+      const minNeeded = k;
+      
+      if (totalShards >= minNeeded) {
+        return {
+          label: "Healthy",
+          color: "emerald",
+          icon: ShieldCheck
+        };
+      } else {
+        return {
+          label: "Degraded",
+          color: "amber",
+          icon: AlertCircle
+        };
+      }
+    }
+
+    // For replication, any shard is sufficient
+    if (algorithm === "replication") {
+      return {
+        label: "Healthy",
+        color: "emerald",
+        icon: ShieldCheck
+      };
+    }
+
+    // Default case
     return {
-      label: isReady ? "Healthy" : "Unknown",
-      color: isReady ? "emerald" : "amber",
-      icon: isReady ? ShieldCheck : Activity
+      label: "Healthy",
+      color: "emerald",
+      icon: ShieldCheck
     };
   };
 
@@ -84,6 +129,19 @@ export default function FileList() {
     } catch (err: any) {
       setDeleteError(err.response?.data?.detail || "Failed to delete file");
       setDeleting(null);
+    }
+  };
+
+  const handleReconstructFile = async (fileId: string) => {
+    setReconstructing(fileId);
+    setReconstructError(null);
+    try {
+      const result = await reconstructFile(fileId);
+      alert(`File reconstructed successfully!\nSize: ${result.reconstructed_size} bytes\nMissing shards: ${result.missing_shards?.length || 0}`);
+    } catch (err: any) {
+      setReconstructError(err.response?.data?.detail || "Failed to reconstruct file");
+    } finally {
+      setReconstructing(null);
     }
   };
 
@@ -181,34 +239,50 @@ export default function FileList() {
                   <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 group-hover:scale-110 transition-transform duration-500">
                     <FileText className="w-7 h-7" />
                   </div>
-                  <div className={cn(
-                    "flex items-center space-x-2 px-3 py-1.5 rounded-full border text-[10px] font-black tracking-widest uppercase",
-                    `bg-${health.color}-500/10 border-${health.color}-500/20 text-${health.color}-400`
-                  )}>
-                    <HealthIcon className="w-3 h-3" />
-                    <span>{health.label}</span>
+                  <div className="flex flex-col items-end space-y-2">
+                    <div className={cn(
+                      "flex items-center space-x-2 px-3 py-1.5 rounded-full border text-[10px] font-black tracking-widest uppercase",
+                      health.color === "emerald" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" :
+                      health.color === "amber" ? "bg-amber-500/10 border-amber-500/20 text-amber-400" :
+                      health.color === "red" ? "bg-red-500/10 border-red-500/20 text-red-400" :
+                      "bg-slate-500/10 border-slate-500/20 text-slate-400"
+                    )}>
+                      <HealthIcon className="w-3 h-3" />
+                      <span>{health.label}</span>
+                    </div>
+                    {file.algorithm === "reed-solomon" && file.config && (
+                      <div className="text-[9px] text-slate-500 font-mono uppercase tracking-wider">
+                        k={file.config.k || file.algorithm_config?.k || 3}, m={file.config.m || file.algorithm_config?.m || 2}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-4 mb-10">
-                  <div>
-                    <h3 className="font-black text-white text-xl truncate tracking-tighter uppercase italic">{file.filename || "Untitled Shard"}</h3>
-                    <p className="text-[10px] font-mono text-slate-600 uppercase tracking-tighter truncate mt-1">
-                      ID: {file.id}
-                    </p>
-                  </div>
+                  <div className="space-y-4 mb-10">
+                    <div>
+                      <h3 className="font-black text-white text-xl truncate tracking-tighter uppercase italic">{file.filename || "Untitled Shard"}</h3>
+                      <p className="text-[10px] font-mono text-slate-600 uppercase tracking-tighter truncate mt-1">
+                        ID: {file.id}
+                      </p>
+                    </div>
 
-                  <div className="grid grid-cols-2 gap-4 py-4 border-y border-white/5">
-                    <div className="space-y-1">
-                      <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Size</p>
-                      <p className="text-sm font-bold text-slate-300">{(file.original_size / 1024).toFixed(2)} KB</p>
+                    <div className="grid grid-cols-2 gap-4 py-4 border-y border-white/5">
+                      <div className="space-y-1">
+                        <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Size</p>
+                        <p className="text-sm font-bold text-slate-300">{(file.original_size / 1024).toFixed(2)} KB</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Protocol</p>
+                        <p className="text-sm font-bold text-blue-400 uppercase tracking-tighter">{file.algorithm || file.algorithm_used}</p>
+                      </div>
                     </div>
-                    <div className="space-y-1">
-                      <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Protocol</p>
-                      <p className="text-sm font-bold text-blue-400 uppercase tracking-tighter">{file.algorithm_used}</p>
+
+                    {/* Shard Count Display */}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500 font-bold uppercase tracking-widest">Shards</span>
+                      <span className="text-slate-300 font-bold">{file.shards?.length || 0} distributed</span>
                     </div>
                   </div>
-                </div>
 
                 <div className="flex gap-3 relative z-10">
                   <button
@@ -310,12 +384,12 @@ export default function FileList() {
                         <p className="text-sm font-bold text-blue-400 uppercase">{statusData.algorithm}</p>
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Total Shards</p>
-                        <p className="text-sm font-bold text-emerald-400">{statusData.total_shards}</p>
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Online Shards</p>
+                        <p className="text-sm font-bold text-emerald-400">{statusData.online_shards}</p>
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Available</p>
-                        <p className="text-sm font-bold text-emerald-400">{statusData.available_shards}</p>
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Needed</p>
+                        <p className="text-sm font-bold text-blue-400">{statusData.needed_shards}</p>
                       </div>
                     </div>
                   </div>
@@ -323,50 +397,84 @@ export default function FileList() {
                   {/* Health Status */}
                   <div className="space-y-3">
                     <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Recovery Status</h3>
-                    <div className="bg-white/5 rounded-2xl p-6 border border-white/10 space-y-3">
-                      <div className="flex items-center space-x-3">
-                        <div className={cn(
-                          "w-3 h-3 rounded-full",
-                          statusData.health === "healthy" ? "bg-emerald-500" : statusData.health === "degraded" ? "bg-amber-500" : "bg-red-500"
-                        )} />
-                        <div>
-                          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Health</p>
-                          <p className={cn(
-                            "font-bold uppercase tracking-tighter",
-                            statusData.health === "healthy" ? "text-emerald-400" : statusData.health === "degraded" ? "text-amber-400" : "text-red-400"
-                          )}>
-                            {statusData.health}
+                    <div className="bg-white/5 rounded-2xl p-6 border border-white/10 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className={cn(
+                            "w-3 h-3 rounded-full",
+                            statusData.health === "healthy" ? "bg-emerald-500" : 
+                            statusData.health === "degraded" ? "bg-amber-500" : "bg-red-500"
+                          )} />
+                          <div>
+                            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Health Status</p>
+                            <p className={cn(
+                              "font-bold uppercase tracking-tighter text-sm",
+                              statusData.health === "healthy" ? "text-emerald-400" : 
+                              statusData.health === "degraded" ? "text-amber-400" : "text-red-400"
+                            )}>
+                              {statusData.health}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Reconstructable</p>
+                          <div className="flex items-center space-x-2 justify-end">
+                            {statusData.reconstructable ? (
+                              <>
+                                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                                <span className="text-sm font-bold text-emerald-400">YES</span>
+                              </>
+                            ) : (
+                              <>
+                                <AlertCircle className="w-4 h-4 text-red-400" />
+                                <span className="text-sm font-bold text-red-400">NO</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {statusData.reconstructable && (
+                        <div className="pt-3 border-t border-white/5">
+                          <p className="text-xs text-slate-400">
+                            Can survive <span className="font-bold text-emerald-400">{statusData.can_survive_more || 0}</span> more shard failures
                           </p>
                         </div>
-                      </div>
-                      <div className="pt-3 border-t border-white/5">
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Reconstruction Possible</p>
-                        <div className="flex items-center space-x-2">
-                          {statusData.can_reconstruct ? (
-                            <>
-                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                              <p className="text-sm text-emerald-300">Yes - {statusData.missing_shard_count === 0 ? "All shards present" : `Can survive ${statusData.can_survive || 0} more shard failures`}</p>
-                            </>
-                          ) : (
-                            <>
-                              <AlertCircle className="w-4 h-4 text-red-400" />
-                              <p className="text-sm text-red-300">No - Insufficient shards for recovery</p>
-                            </>
-                          )}
-                        </div>
-                      </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Missing Shards */}
-                  {statusData.missing_shards && statusData.missing_shards.length > 0 && (
-                    <div className="space-y-3">
-                      <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Missing Shards</h3>
-                      <div className="bg-amber-500/10 rounded-2xl p-4 border border-amber-500/20 space-y-2">
-                        <p className="text-xs font-bold text-amber-400 uppercase tracking-widest">Indices: {statusData.missing_shards.join(", ")}</p>
+                  {/* Shard Details */}
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Shard Distribution</h3>
+                    <div className="bg-white/5 rounded-2xl p-6 border border-white/10">
+                      <div className="grid grid-cols-1 gap-3">
+                        {statusData.shard_status?.map((shard: any, index: number) => (
+                          <div key={index} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                            <div className="flex items-center space-x-3">
+                              <div className={cn(
+                                "w-2 h-2 rounded-full",
+                                shard.status === "online" ? "bg-emerald-500" : "bg-red-500"
+                              )} />
+                              <div>
+                                <p className="text-xs font-bold text-white">Shard {shard.shard_index}</p>
+                                <p className="text-xs text-slate-500 font-mono">{shard.bucket}</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className={cn(
+                                "text-xs font-bold uppercase tracking-widest",
+                                shard.status === "online" ? "text-emerald-400" : "text-red-400"
+                              )}>
+                                {shard.status}
+                              </p>
+                              <p className="text-xs text-slate-500">{(shard.size / 1024).toFixed(1)} KB</p>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  )}
+                  </div>
 
                   {/* Action Buttons */}
                   <div className="flex gap-3 pt-4">
@@ -376,18 +484,28 @@ export default function FileList() {
                     >
                       Close
                     </button>
+                    {statusData.reconstructable && (
+                      <button
+                        onClick={() => handleReconstructFile(selectedFileId)}
+                        disabled={reconstructing === selectedFileId}
+                        className="flex-1 py-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 font-bold uppercase tracking-tighter transition-colors disabled:opacity-50 flex items-center justify-center space-x-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>{reconstructing === selectedFileId ? "Reconstructing..." : "Reconstruct"}</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDeleteFile(selectedFileId)}
                       disabled={deleting === selectedFileId}
                       className="flex-1 py-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300 font-bold uppercase tracking-tighter transition-colors disabled:opacity-50 flex items-center justify-center space-x-2"
                     >
                       <Trash2 className="w-4 h-4" />
-                      <span>Delete File</span>
+                      <span>{deleting === selectedFileId ? "Deleting..." : "Delete"}</span>
                     </button>
                   </div>
-                  {deleteError && (
+                  {(deleteError || reconstructError) && (
                     <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs font-semibold">
-                      {deleteError}
+                      {deleteError || reconstructError}
                     </div>
                   )}
                 </div>

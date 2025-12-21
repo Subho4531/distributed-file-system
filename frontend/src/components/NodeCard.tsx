@@ -1,6 +1,6 @@
 import type { NodeStatus } from "../types/node";
 import { useState } from "react";
-import { Server, Database, Activity, Monitor, AlertTriangle, ShieldCheck } from "lucide-react";
+import { Server, Database, Activity, Monitor, AlertTriangle, ShieldCheck, HardDrive } from "lucide-react";
 import { cn } from "../lib/utils";
 import { motion } from "framer-motion";
 
@@ -8,12 +8,39 @@ interface NodeCardProps {
   node: NodeStatus;
 }
 
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
 export default function NodeCard({ node }: NodeCardProps) {
   const [forcedOffline, setForcedOffline] = useState(false);
-  const isOnline = node.status === "online" && !forcedOffline;
+  
+  // Provide default values to prevent errors
+  const nodeData = {
+    node_id: node?.node_id || 'Unknown Node',
+    status: node?.status || 'offline',
+    files_count: node?.files_count || 0,
+    capacity_gb: node?.capacity_gb || (node?.capacity ? parseInt(node.capacity.replace(/\D/g, '')) || 50 : 50),
+    capacity_bytes: node?.capacity_bytes || (node?.capacity_gb ? node.capacity_gb * 1024 * 1024 * 1024 : 50 * 1024 * 1024 * 1024),
+    used_bytes: node?.used_bytes || 0,
+    utilization_percent: node?.utilization_percent || 0,
+    available_bytes: node?.available_bytes || (node?.capacity_bytes ? node.capacity_bytes - (node?.used_bytes || 0) : 50 * 1024 * 1024 * 1024),
+    last_checked: node?.last_checked || new Date().toISOString()
+  };
+  
+  const isOnline = nodeData.status === "online" && !forcedOffline;
+  
+  // Calculate display values with safe defaults
+  const displayUtilization = isOnline ? Math.max(0, Math.min(100, nodeData.utilization_percent)) : 0;
+  const displayUsed = isOnline ? nodeData.used_bytes : 0;
+  const displayFiles = isOnline ? nodeData.files_count : 0;
 
   return (
-    <div className="premium-glass p-0 group overflow-visible">
+    <div className="premium-glass p-0 group overflow-visible relative">
       <div className="p-6 space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -25,7 +52,7 @@ export default function NodeCard({ node }: NodeCardProps) {
               <Server className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="font-bold text-white tracking-tight">{node.node_id}</h3>
+              <h3 className="font-bold text-white tracking-tight">{nodeData.node_id}</h3>
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest flex items-center">
                 <Monitor className="w-3 h-3 mr-1" /> Primary Cluster
               </p>
@@ -49,31 +76,56 @@ export default function NodeCard({ node }: NodeCardProps) {
             <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center">
               <Database className="w-3 h-3 mr-1" /> Files
             </span>
-            <p className="text-xl font-bold text-white">{node.files_count}</p>
+            <p className="text-xl font-bold text-white">{displayFiles}</p>
           </div>
           <div className="space-y-1 text-right">
             <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center justify-end">
-              Capacity <Activity className="w-3 h-3 ml-1" />
+              Capacity <HardDrive className="w-3 h-3 ml-1" />
             </span>
-            <p className="text-xl font-bold text-white">{node.capacity || "500 GB"}</p>
+            <p className="text-xl font-bold text-white">{nodeData.capacity_gb} GB</p>
           </div>
         </div>
 
-        {/* Capacity Visualization */}
-        <div className="space-y-2">
-          <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
-            <span>Utilization</span>
-            <span>{isOnline ? "12%" : "0%"}</span>
+        {/* Storage Details */}
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Storage Usage</span>
+            <span className="text-[10px] font-bold text-slate-300">
+              {formatBytes(displayUsed)} / {formatBytes(nodeData.capacity_bytes)}
+            </span>
           </div>
-          <div className="h-1.5 w-full bg-slate-800/50 rounded-full overflow-hidden border border-white/5">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: isOnline ? "12%" : "0%" }}
-              className={cn(
-                "h-full rounded-full bg-gradient-to-r",
-                isOnline ? "from-blue-500 to-purple-500" : "bg-slate-700"
-              )}
-            />
+          
+          {/* Capacity Visualization */}
+          <div className="space-y-2">
+            <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
+              <span>Utilization</span>
+              <span>{displayUtilization.toFixed(1)}%</span>
+            </div>
+            <div className="h-2 w-full bg-slate-800/50 rounded-full overflow-hidden border border-white/5">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(100, Math.max(0, displayUtilization))}%` }}
+                transition={{ duration: 0.8, ease: "easeOut" }}
+                className={cn(
+                  "h-full rounded-full transition-all duration-500",
+                  isOnline 
+                    ? displayUtilization > 80 
+                      ? "bg-gradient-to-r from-red-500 to-orange-500" 
+                      : displayUtilization > 60 
+                        ? "bg-gradient-to-r from-amber-500 to-yellow-500"
+                        : "bg-gradient-to-r from-blue-500 to-purple-500"
+                    : "bg-slate-700"
+                )}
+              />
+            </div>
+          </div>
+
+          {/* Available Space */}
+          <div className="flex justify-between text-[10px] text-slate-500">
+            <span>Available:</span>
+            <span className="font-bold">
+              {formatBytes(isOnline ? nodeData.available_bytes : nodeData.capacity_bytes)}
+            </span>
           </div>
         </div>
 
@@ -103,11 +155,15 @@ export default function NodeCard({ node }: NodeCardProps) {
 
       {/* Warning Overlay for Offline Status */}
       {!isOnline && (
-        <div className="absolute inset-0 rounded-2xl bg-rose-950/20 backdrop-blur-[2px] pointer-events-none flex items-center justify-center">
-          <div className="bg-rose-500 text-white p-1 rounded-full scale-150 shadow-2xl shadow-rose-500/50">
-            <AlertTriangle className="w-4 h-4" />
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="absolute inset-0 rounded-2xl bg-rose-950/30 backdrop-blur-[2px] pointer-events-none flex items-center justify-center border-2 border-rose-500/30"
+        >
+          <div className="bg-rose-500 text-white p-2 rounded-full shadow-2xl shadow-rose-500/50">
+            <AlertTriangle className="w-5 h-5" />
           </div>
-        </div>
+        </motion.div>
       )}
     </div>
   );

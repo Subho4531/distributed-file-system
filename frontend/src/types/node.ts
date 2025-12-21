@@ -2,8 +2,14 @@ export interface NodeStatus {
   node_id: string;
   status: "online" | "offline";
   files_count: number;
-  capacity?: string;
+  capacity_gb?: number;
+  capacity_bytes?: number;
+  used_bytes?: number;
+  utilization_percent?: number;
+  available_bytes?: number;
   last_checked: string;
+  // Legacy support
+  capacity?: string;
 }
 
 export interface NodesStatusResponse {

@@ -205,15 +205,49 @@ class SupabaseStorageManager:
         normalized = []
         for rec in records:
             algo = rec.get("algorithm") or rec.get("algorithm_used")
+            
+            # Handle config data - it might be stored as JSON string
             cfg = rec.get("config") or rec.get("algorithm_config") or {}
+            if isinstance(cfg, str):
+                try:
+                    import json
+                    cfg = json.loads(cfg)
+                except:
+                    cfg = {}
+            elif not isinstance(cfg, dict):
+                cfg = {}
+            
+            # Handle shards data - it might be stored as JSON string
             shards = rec.get("shards") or []
+            if isinstance(shards, str):
+                try:
+                    import json
+                    shards = json.loads(shards)
+                except:
+                    shards = []
+            elif not isinstance(shards, list):
+                shards = []
+            
+            # Ensure each shard has the required fields
+            processed_shards = []
+            for shard in shards:
+                if isinstance(shard, dict):
+                    processed_shards.append({
+                        "bucket": shard.get("bucket", ""),
+                        "filename": shard.get("filename", ""),
+                        "url": shard.get("url", ""),
+                        "size": shard.get("size", 0),
+                        "shard_index": shard.get("shard_index", 0),
+                        "uploaded_at": shard.get("uploaded_at", "")
+                    })
+            
             normalized.append({
                 "id": rec.get("id"),
                 "filename": rec.get("filename") or rec.get("id"),
                 "original_size": rec.get("original_size") or rec.get("size") or 0,
                 "algorithm": algo,
                 "config": cfg,
-                "shards": shards,
+                "shards": processed_shards,
                 "cost_estimate": rec.get("cost_estimate"),
                 "uploaded_at": rec.get("created_at") or rec.get("uploaded_at")
             })

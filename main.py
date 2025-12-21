@@ -77,13 +77,60 @@ async def get_nodes_status():
     """Get status and health of all storage nodes"""
     status = storage.get_bucket_status()
     
+    # Get all files to calculate actual usage
+    all_files = storage.list_files_metadata()
+    
     nodes = []
-    for bucket_name, info in status.items():
+    
+    for i, (bucket_name, info) in enumerate(status.items()):
+        # Calculate actual storage usage for this node
+        used_bytes = 0
+        files_on_node = set()  # Use set to count unique files
+        
+        for file_data in all_files:
+            file_id = file_data.get("id", "unknown")
+            shards = file_data.get("shards", [])
+            
+            # Ensure shards is a list
+            if not isinstance(shards, list):
+                continue
+            
+            for shard in shards:
+                if not isinstance(shard, dict):
+                    continue
+                    
+                shard_bucket = shard.get("bucket", "")
+                
+                if shard_bucket == bucket_name:
+                    shard_size = shard.get("size", 0)
+                    if isinstance(shard_size, (int, float)) and shard_size > 0:
+                        used_bytes += int(shard_size)
+                        files_on_node.add(file_id)
+        
+        # Simulate different capacity sizes for variety
+        capacity_gb = [45, 50, 55, 60, 48][i % 5]  # Different capacities per node
+        capacity_bytes = capacity_gb * 1024 * 1024 * 1024
+        
+        # Calculate utilization percentage with better precision for small values
+        utilization_percent = (used_bytes / capacity_bytes * 100) if capacity_bytes > 0 else 0
+        
+        # Use more decimal places for small utilization values
+        if utilization_percent < 0.1:
+            utilization_display = round(utilization_percent, 3)  # 3 decimal places for small values
+        elif utilization_percent < 1.0:
+            utilization_display = round(utilization_percent, 2)  # 2 decimal places for medium values
+        else:
+            utilization_display = round(utilization_percent, 1)  # 1 decimal place for larger values
+        
         nodes.append({
             "node_id": bucket_name,
             "status": info["status"],
-            "files_count": info["file_count"],
-            "capacity": info.get("capacity", "50GB"),
+            "files_count": len(files_on_node),  # Count unique files
+            "capacity_gb": capacity_gb,
+            "capacity_bytes": capacity_bytes,
+            "used_bytes": used_bytes,
+            "utilization_percent": utilization_display,
+            "available_bytes": capacity_bytes - used_bytes,
             "last_checked": datetime.utcnow().isoformat()
         })
     
