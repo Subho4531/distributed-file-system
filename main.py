@@ -11,6 +11,7 @@ import zlib
 
 from storage_manager import SupabaseStorageManager
 from smart_engine import SmartStorageEngine
+from node_simulator import node_simulator
 from algorithms import (
     encode_with_replication,
     encode_with_reed_solomon,
@@ -124,14 +125,15 @@ async def get_nodes_status():
         
         nodes.append({
             "node_id": bucket_name,
-            "status": info["status"],
-            "files_count": len(files_on_node),  # Count unique files
+            "status": "offline" if node_simulator.is_node_failed(bucket_name) else info["status"],
+            "files_count": len(files_on_node) if not node_simulator.is_node_failed(bucket_name) else 0,
             "capacity_gb": capacity_gb,
             "capacity_bytes": capacity_bytes,
-            "used_bytes": used_bytes,
-            "utilization_percent": utilization_display,
-            "available_bytes": capacity_bytes - used_bytes,
-            "last_checked": datetime.utcnow().isoformat()
+            "used_bytes": used_bytes if not node_simulator.is_node_failed(bucket_name) else 0,
+            "utilization_percent": utilization_display if not node_simulator.is_node_failed(bucket_name) else 0,
+            "available_bytes": capacity_bytes if node_simulator.is_node_failed(bucket_name) else capacity_bytes - used_bytes,
+            "last_checked": datetime.utcnow().isoformat(),
+            "simulated_failure": node_simulator.is_node_failed(bucket_name)
         })
     
     return NodeStatusResponse(
@@ -139,6 +141,29 @@ async def get_nodes_status():
         online_nodes=sum(1 for n in nodes if n["status"] == "online"),
         nodes=nodes
     )
+
+@app.post("/nodes/{node_id}/simulate-failure", tags=["Nodes"])
+async def simulate_node_failure(node_id: str):
+    """Simulate a node failure"""
+    success = node_simulator.simulate_failure(node_id)
+    if success:
+        return {"message": f"Node {node_id} failure simulated", "status": "failed"}
+    else:
+        return {"message": f"Node {node_id} already failed", "status": "already_failed"}
+
+@app.post("/nodes/{node_id}/restore", tags=["Nodes"])
+async def restore_node(node_id: str):
+    """Restore a failed node"""
+    success = node_simulator.restore_node(node_id)
+    if success:
+        return {"message": f"Node {node_id} restored", "status": "online"}
+    else:
+        return {"message": f"Node {node_id} was not failed", "status": "already_online"}
+
+@app.get("/nodes/failures", tags=["Nodes"])
+async def get_failure_status():
+    """Get current node failure simulation status"""
+    return node_simulator.get_failure_info()
 
 @app.post("/upload", response_model=UploadResponse, tags=["Files"])
 async def upload_file(
@@ -303,22 +328,29 @@ async def get_file_status(file_id: str):
     if not metadata:
         raise HTTPException(404, f"File {file_id} not found")
     
-    # Check shard availability
+    # Check shard availability (considering simulated failures)
     shard_status = []
     for shard in metadata["shards"]:
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.head(shard["url"])
-                status = "online" if response.status_code == 200 else "offline"
-        except:
+        shard_bucket = shard.get("bucket", "")
+        
+        # Check if node is simulated as failed
+        if node_simulator.is_node_failed(shard_bucket):
             status = "offline"
+        else:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.head(shard["url"])
+                    status = "online" if response.status_code == 200 else "offline"
+            except:
+                status = "offline"
         
         shard_status.append({
             "shard_index": shard["shard_index"],
             "bucket": shard["bucket"],
             "status": status,
-            "size": shard.get("size", 0)
+            "size": shard.get("size", 0),
+            "simulated_failure": node_simulator.is_node_failed(shard_bucket)
         })
     
     # Calculate health metrics
@@ -358,15 +390,25 @@ async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
     if not metadata:
         raise HTTPException(404, f"File {file_id} not found")
     
-    # Download available shards
+    # Download available shards (skip failed nodes)
     shard_data_list = []
     missing_indices = []
     
     for i, shard_info in enumerate(metadata["shards"]):
+        shard_bucket = shard_info.get("bucket", "")
+        
+        # Check if this shard's node is simulated as failed
+        if node_simulator.is_node_failed(shard_bucket):
+            missing_indices.append(i)
+            shard_data_list.append((i, None))
+            print(f"[SIMULATOR] Skipping shard {i} - node {shard_bucket} is simulated as failed")
+            continue
+        
         try:
             shard_data = storage.download_shard(shard_info["url"])
             shard_data_list.append((i, shard_data))
-        except:
+        except Exception as e:
+            print(f"[ERROR] Failed to download shard {i} from {shard_bucket}: {e}")
             missing_indices.append(i)
             shard_data_list.append((i, None))
     

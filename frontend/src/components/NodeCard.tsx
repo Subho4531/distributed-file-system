@@ -1,11 +1,13 @@
 import type { NodeStatus } from "../types/node";
 import { useState } from "react";
-import { Server, Database, Activity, Monitor, AlertTriangle, ShieldCheck, HardDrive } from "lucide-react";
+import { Server, Database, Monitor, AlertTriangle, ShieldCheck, HardDrive } from "lucide-react";
 import { cn } from "../lib/utils";
 import { motion } from "framer-motion";
+import { simulateNodeFailure, restoreNode } from "../api/cosmeon";
 
 interface NodeCardProps {
   node: NodeStatus;
+  onNodeStatusChange?: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -16,8 +18,8 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-export default function NodeCard({ node }: NodeCardProps) {
-  const [forcedOffline, setForcedOffline] = useState(false);
+export default function NodeCard({ node, onNodeStatusChange }: NodeCardProps) {
+  const [isToggling, setIsToggling] = useState(false);
   
   // Provide default values to prevent errors
   const nodeData = {
@@ -29,19 +31,50 @@ export default function NodeCard({ node }: NodeCardProps) {
     used_bytes: node?.used_bytes || 0,
     utilization_percent: node?.utilization_percent || 0,
     available_bytes: node?.available_bytes || (node?.capacity_bytes ? node.capacity_bytes - (node?.used_bytes || 0) : 50 * 1024 * 1024 * 1024),
-    last_checked: node?.last_checked || new Date().toISOString()
+    last_checked: node?.last_checked || new Date().toISOString(),
+    simulated_failure: node?.simulated_failure || false
   };
   
-  const isOnline = nodeData.status === "online" && !forcedOffline;
+  const isOnline = nodeData.status === "online";
+  const isSimulatedFailure = nodeData.simulated_failure;
   
   // Calculate display values with safe defaults
   const displayUtilization = isOnline ? Math.max(0, Math.min(100, nodeData.utilization_percent)) : 0;
   const displayUsed = isOnline ? nodeData.used_bytes : 0;
   const displayFiles = isOnline ? nodeData.files_count : 0;
 
+  const handleToggleFailure = async () => {
+    if (isToggling) return;
+    
+    setIsToggling(true);
+    try {
+      console.log(`Attempting to ${isSimulatedFailure ? 'restore' : 'simulate failure for'} node: ${nodeData.node_id}`);
+      
+      if (isSimulatedFailure) {
+        const result = await restoreNode(nodeData.node_id);
+        console.log('Restore result:', result);
+      } else {
+        const result = await simulateNodeFailure(nodeData.node_id);
+        console.log('Simulate failure result:', result);
+      }
+      
+      // Notify parent component to refresh data
+      if (onNodeStatusChange) {
+        console.log('Calling onNodeStatusChange to refresh data');
+        onNodeStatusChange();
+      }
+    } catch (error) {
+      console.error('Failed to toggle node status:', error);
+      // You could add a toast notification here
+      alert(`Failed to ${isSimulatedFailure ? 'restore' : 'simulate failure for'} node ${nodeData.node_id}: ${error}`);
+    } finally {
+      setIsToggling(false);
+    }
+  };
+
   return (
     <div className="premium-glass p-0 group overflow-visible relative">
-      <div className="p-6 space-y-6">
+      <div className="p-6 space-y-6 relative z-10">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center space-x-3">
@@ -131,23 +164,38 @@ export default function NodeCard({ node }: NodeCardProps) {
 
         {/* Action Toggle */}
         <button
-          onClick={() => setForcedOffline(!forcedOffline)}
+          onClick={() => {
+            console.log('Button clicked!', { isToggling, isSimulatedFailure, nodeId: nodeData.node_id });
+            handleToggleFailure();
+          }}
+          disabled={isToggling}
           className={cn(
-            "w-full py-3 rounded-xl text-xs font-bold transition-all duration-300 flex items-center justify-center space-x-2 border",
-            forcedOffline
-              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20"
-              : "bg-slate-800/50 text-slate-400 border-white/5 hover:border-white/10 hover:text-white"
+            "w-full py-3 rounded-xl text-xs font-bold transition-all duration-300 flex items-center justify-center space-x-2 border relative z-20",
+            isSimulatedFailure
+              ? "bg-emerald-500/20 text-white border-emerald-500/40 hover:bg-emerald-500/30"
+              : "bg-red-500/20 text-white border-red-500/40 hover:bg-red-500/30",
+            isToggling && "opacity-50 cursor-not-allowed"
           )}
+          style={{ pointerEvents: isToggling ? 'none' : 'auto' }}
         >
-          {forcedOffline ? (
+          {isToggling ? (
             <>
-              <ShieldCheck className="w-4 h-4" />
-              <span>Restore Node Connection</span>
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                className="w-4 h-4 border-2 border-white border-t-transparent rounded-full"
+              />
+              <span className="text-white">Processing...</span>
+            </>
+          ) : isSimulatedFailure ? (
+            <>
+              <ShieldCheck className="w-4 h-4 text-white" />
+              <span className="text-white">Restore Node</span>
             </>
           ) : (
             <>
-              <AlertTriangle className="w-4 h-4" />
-              <span>Simulate Node Failure</span>
+              <AlertTriangle className="w-4 h-4 text-white" />
+              <span className="text-white">Simulate Failure</span>
             </>
           )}
         </button>
@@ -159,6 +207,7 @@ export default function NodeCard({ node }: NodeCardProps) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="absolute inset-0 rounded-2xl bg-rose-950/30 backdrop-blur-[2px] pointer-events-none flex items-center justify-center border-2 border-rose-500/30"
+          style={{ zIndex: 1 }}
         >
           <div className="bg-rose-500 text-white p-2 rounded-full shadow-2xl shadow-rose-500/50">
             <AlertTriangle className="w-5 h-5" />

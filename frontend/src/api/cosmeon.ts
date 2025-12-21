@@ -11,8 +11,15 @@ export const cosmeonAPI = axios.create({
 // Nodes
 // --------------------
 export async function fetchNodeStatus() {
-  const res = await cosmeonAPI.get("/nodes/status");
-  return res.data;
+  console.log('API: Fetching node status...');
+  try {
+    const res = await cosmeonAPI.get("/nodes/status");
+    console.log('API: Node status response:', res.data);
+    return res.data;
+  } catch (error) {
+    console.error('API: Failed to fetch node status:', error);
+    throw error;
+  }
 }
 
 // --------------------
@@ -44,5 +51,37 @@ export async function reconstructFile(fileId: string) {
 // --------------------
 export async function deleteFile(fileId: string) {
   const res = await cosmeonAPI.delete(`/file/${fileId}`);
+  return res.data;
+}
+
+// --------------------
+// Node simulation
+// --------------------
+export async function simulateNodeFailure(nodeId: string) {
+  console.log(`API: Simulating failure for node ${nodeId}`);
+  try {
+    const res = await cosmeonAPI.post(`/nodes/${nodeId}/simulate-failure`);
+    console.log(`API: Simulate failure response:`, res.data);
+    return res.data;
+  } catch (error) {
+    console.error(`API: Failed to simulate failure for node ${nodeId}:`, error);
+    throw error;
+  }
+}
+
+export async function restoreNode(nodeId: string) {
+  console.log(`API: Restoring node ${nodeId}`);
+  try {
+    const res = await cosmeonAPI.post(`/nodes/${nodeId}/restore`);
+    console.log(`API: Restore response:`, res.data);
+    return res.data;
+  } catch (error) {
+    console.error(`API: Failed to restore node ${nodeId}:`, error);
+    throw error;
+  }
+}
+
+export async function getFailureStatus() {
+  const res = await cosmeonAPI.get("/nodes/failures");
   return res.data;
 }

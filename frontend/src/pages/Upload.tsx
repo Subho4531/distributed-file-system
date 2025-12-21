@@ -12,12 +12,11 @@ import {
   AlertCircle,
   X,
   Cpu,
-  Activity,
   Files
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 export default function Upload() {
   const [file, setFile] = useState<File | null>(null);
@@ -145,35 +144,43 @@ export default function Upload() {
           </div>
 
           <div className="space-y-6">
-            <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] flex items-center">
-              <Shield className="w-3 h-3 mr-2" /> Storage Protocol
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] flex items-center">
+                <Shield className="w-3 h-3 mr-2" /> Storage Protocol
+              </h3>
+              {selectedAlgo !== "auto" && (
+                <span className="text-[8px] font-black text-slate-600 uppercase tracking-widest px-2 py-1 rounded bg-slate-800">
+                  Auto-Disabled
+                </span>
+              )}
+            </div>
             <div className="grid grid-cols-1 gap-3">
               {policies.map((p) => {
                 const Icon = p.icon;
                 const isActive = policy === p.id;
+                const isDisabled = selectedAlgo !== "auto";
                 return (
                   <button
                     key={p.id}
-                    onClick={() => selectedAlgo === "auto" && setPolicy(p.id)}
-                    disabled={selectedAlgo !== "auto"}
+                    onClick={() => !isDisabled && setPolicy(p.id)}
+                    disabled={isDisabled}
                     className={cn(
                       "w-full text-left p-4 rounded-2xl border transition-all duration-300 relative group overflow-hidden",
-                      isActive
+                      isActive && !isDisabled
                         ? "bg-slate-900 border-blue-500/50 shadow-lg shadow-blue-500/5"
                         : "bg-transparent border-white/5 hover:border-white/10",
-                      selectedAlgo !== "auto" ? "opacity-50 cursor-not-allowed" : ""
+                      isDisabled ? "opacity-30 cursor-not-allowed" : ""
                     )}
                   >
                     <div className="flex items-center space-x-4 relative z-10">
                       <div className={cn(
                         "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
-                        isActive ? "bg-blue-500 text-white" : "bg-slate-800 text-slate-500 group-hover:text-slate-300"
+                        isActive && !isDisabled ? "bg-blue-500 text-white" : "bg-slate-800 text-slate-500 group-hover:text-slate-300"
                       )}>
                         <Icon className="w-5 h-5" />
                       </div>
                       <div>
-                        <p className={cn("font-bold text-sm uppercase tracking-tight", isActive ? "text-white" : "text-slate-400")}>{p.label}</p>
+                        <p className={cn("font-bold text-sm uppercase tracking-tight", isActive && !isDisabled ? "text-white" : "text-slate-400")}>{p.label}</p>
                         <p className="text-[10px] text-slate-500 font-bold leading-tight">{p.desc}</p>
                       </div>
                     </div>
@@ -221,9 +228,11 @@ export default function Upload() {
                       Drop your data here
                     </p>
                     <p className="text-slate-500 font-medium">
-                      or click to <span className="text-blue-400 font-bold group-hover:underline">browse files</span>
+                      or click to <span className="text-blue-400 font-bold group-hover:underline z-50">browse files</span>
                     </p>
                   </div>
+
+                
                   <div className="flex items-center space-x-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest mt-4">
                     <span>Max 2GB</span>
                     <span className="w-1 h-1 rounded-full bg-slate-700" />
@@ -237,8 +246,8 @@ export default function Upload() {
                   animate={{ opacity: 1, scale: 1 }}
                   className="w-full max-w-lg space-y-6 mx-auto"
                 >
-                  <div className="flex items-center justify-between p-5 rounded-3xl bg-blue-500/5 border border-blue-500/20">
-                    <div className="flex items-center space-x-4">
+                  <div className="relative p-5 rounded-3xl bg-blue-500/5 border border-blue-500/20">
+                    <div className="flex items-center space-x-4 pr-12">
                       <div className="w-14 h-14 rounded-2xl bg-blue-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
                         <File className="w-7 h-7" />
                       </div>
@@ -248,26 +257,45 @@ export default function Upload() {
                       </div>
                     </div>
                     <button
-                      onClick={() => setFile(null)}
-                      className="p-2.5 hover:bg-white/5 rounded-full text-slate-500 hover:text-white transition-colors"
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('Mouse down on remove button');
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('Removing file:', file?.name);
+                        setFile(null);
+                        setResult(null);
+                      }}
+                      className="absolute top-3 right-3 p-3 bg-red-500/20 hover:bg-red-500/30 rounded-full text-red-400 hover:text-red-300 transition-colors border border-red-500/30 hover:border-red-500/50 shadow-lg"
+                      title="Remove file"
+                      aria-label="Remove file"
                     >
-                      <X className="w-5 h-5" />
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className={cn(
+                    "grid gap-4",
+                    selectedAlgo === "auto" ? "grid-cols-2" : "grid-cols-1"
+                  )}>
                     <div className="p-4 rounded-2xl bg-slate-900 border border-white/5">
                       <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1">Target Engine</p>
                       <p className="text-sm font-bold text-blue-400 uppercase italic tracking-tighter">
                         {algorithms.find(a => a.id === selectedAlgo)?.label}
                       </p>
                     </div>
-                    <div className="p-4 rounded-2xl bg-slate-900 border border-white/5">
-                      <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1">Policy Active</p>
-                      <p className="text-sm font-bold text-emerald-400 uppercase italic tracking-tighter">
-                        {policies.find(p => p.id === policy)?.label}
-                      </p>
-                    </div>
+                    {selectedAlgo === "auto" && (
+                      <div className="p-4 rounded-2xl bg-slate-900 border border-white/5">
+                        <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1">Policy Active</p>
+                        <p className="text-sm font-bold text-emerald-400 uppercase italic tracking-tighter">
+                          {policies.find(p => p.id === policy)?.label}
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <button

@@ -8,6 +8,7 @@ export interface NodeStatus {
   utilization_percent?: number;
   available_bytes?: number;
   last_checked: string;
+  simulated_failure?: boolean;
   // Legacy support
   capacity?: string;
 }

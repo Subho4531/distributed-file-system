@@ -14,6 +14,7 @@ export default function Dashboard() {
   const loadData = async () => {
     try {
       setLoading(true);
+      console.log('Dashboard: Loading data...');
       const [nodeRes, filesRes] = await Promise.all([
         fetchNodeStatus().catch(err => {
           console.warn("Node status fetch failed:", err);
@@ -25,6 +26,7 @@ export default function Dashboard() {
         })
       ]);
       
+      console.log('Dashboard: Data loaded', { nodeRes, filesRes });
       setData(nodeRes);
       setFiles(Array.isArray(filesRes) ? filesRes : []);
       setError(null);
@@ -314,7 +316,7 @@ export default function Dashboard() {
                 viewport={{ once: true }}
                 transition={{ delay: index * 0.05 }}
               >
-                <NodeCard node={node} />
+                <NodeCard node={node} onNodeStatusChange={loadData} />
               </motion.div>
             ))
           ) : (
