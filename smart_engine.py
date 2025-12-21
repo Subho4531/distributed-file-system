@@ -37,7 +37,6 @@ class SmartStorageEngine:
     ALGORITHM_COSTS = {
         "replication": 3.0,      # 3x storage overhead
         "reed-solomon": 1.67,    # ~1.67x storage overhead for k=3, m=2
-        "xor-parity": 1.5,       # 1.5x storage overhead for 2 parity disks
     }
     
     # Compressible file extensions
@@ -93,23 +92,65 @@ class SmartStorageEngine:
         Returns:
             Decision dict with algorithm, config, reasoning, and cost estimate
         """
-        if policy == "cost":
+        policy_key = (policy or "").lower()
+
+        if policy_key == "eco":
+            return self._select_eco(metadata)
+        if policy_key == "cost":
             return self._select_cost_optimized(metadata)
-        elif policy == "reliability":
+        elif policy_key == "reliability":
             return self._select_reliability_optimized(metadata)
         else:  # balanced (default)
             return self._select_balanced(metadata)
+
+    def _select_eco(self, metadata: FileMetadata) -> Dict[str, Any]:
+        """Select algorithm prioritizing storage economy (eco).
+
+        Eco follows smart selection but favors compression to reduce
+        storage cost: small files -> replication+compress, medium/large
+        -> reed-solomon+compress.
+        """
+        if metadata.size < 10_000_000:  # <10MB
+            algorithm = "replication"
+            config = {"replication_factor": 3, "compress": True}
+        else:
+            # For medium and large files, prefer Reed-Solomon with compression
+            algorithm = "reed-solomon"
+            # Use slightly different k/m for very large files if critical
+            if metadata.is_critical or metadata.size > 1_000_000_000:
+                config = {"k": 3, "m": 3, "compress": True}
+            else:
+                config = {"k": 4, "m": 2, "compress": True}
+
+        cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
+        return {
+            "algorithm": algorithm,
+            "config": config,
+            "reasoning": f"Eco policy: {algorithm} with compression for {metadata.filename}",
+            "cost_estimate": cost,
+        }
     
     def _select_cost_optimized(self, metadata: FileMetadata) -> Dict[str, Any]:
         """Select algorithm prioritizing cost."""
-        algorithm = "xor-parity"
-        config = {"parity_disks": 2}
-        cost = self._estimate_cost(algorithm, metadata)
+        # For cost-sensitive (eco) policy we prefer compression and
+        # lower-overhead schemes. Small files can be replicated and
+        # compressed (cheap to manage), medium/large files use
+        # Reed-Solomon (with compression for very large files).
+        if metadata.size < 10_000_000:  # <10MB
+            algorithm = "replication"
+            config = {"replication_factor": 3, "compress": True}
+        elif metadata.size < 1_000_000_000:  # <1GB
+            algorithm = "reed-solomon"
+            config = {"k": 4, "m": 2, "compress": False}
+        else:
+            algorithm = "reed-solomon"
+            config = {"k": 4, "m": 2, "compress": True}
+        cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
         
         return {
             "algorithm": algorithm,
             "config": config,
-            "reasoning": "Cost-optimized: XOR parity provides good cost/redundancy balance",
+            "reasoning": "Cost-optimized: Reed-Solomon chosen for cost/reliability balance",
             "cost_estimate": cost,
         }
     
@@ -123,7 +164,7 @@ class SmartStorageEngine:
             algorithm = "reed-solomon"
             config = {"k": 3, "m": 3}  # More parity blocks for better recovery
         
-        cost = self._estimate_cost(algorithm, metadata)
+        cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
         
         return {
             "algorithm": algorithm,
@@ -137,17 +178,18 @@ class SmartStorageEngine:
         # Small files: replication (simpler, lower overhead for small sizes)
         if metadata.size < 10_000_000:  # < 10MB
             algorithm = "replication"
-            config = {"replication_factor": 3}
+            config = {"replication_factor": 3, "compress": False}
         # Medium files: Reed-Solomon (good balance)
         elif metadata.size < 1_000_000_000:  # < 1GB
             algorithm = "reed-solomon"
-            config = {"k": 4, "m": 2}  # 50% overhead, can recover from 2 failures
+            config = {"k": 4, "m": 2, "compress": False}  # 50% overhead, can recover from 2 failures
         # Large files: XOR parity (cost-effective for large data)
         else:
-            algorithm = "xor-parity"
-            config = {"parity_disks": 2}
+            # For balanced policy prefer Reed-Solomon with compression for large files
+            algorithm = "reed-solomon"
+            config = {"k": 4, "m": 2, "compress": True}
         
-        cost = self._estimate_cost(algorithm, metadata)
+        cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
         
         return {
             "algorithm": algorithm,
@@ -161,7 +203,7 @@ class SmartStorageEngine:
         Configure algorithm parameters based on file metadata.
         
         Args:
-            algorithm: Algorithm name ("replication", "reed-solomon", "xor-parity")
+            algorithm: Algorithm name ("replication", "reed-solomon")
             metadata: File metadata
             
         Returns:
@@ -170,24 +212,21 @@ class SmartStorageEngine:
         if algorithm == "replication":
             # More replicas for critical files
             factor = 4 if metadata.is_critical else 3
-            return {"replication_factor": factor}
+            return {"replication_factor": factor, "compress": bool(metadata.is_compressible)}
         
         elif algorithm == "reed-solomon":
             # More parity blocks for critical/large files
             if metadata.is_critical or metadata.size > 500_000_000:
-                return {"k": 3, "m": 3}
+                return {"k": 3, "m": 3, "compress": True}
             else:
-                return {"k": 4, "m": 2}
+                return {"k": 4, "m": 2, "compress": bool(metadata.is_compressible)}
         
-        elif algorithm == "xor-parity":
-            # More parity disks for critical files
-            parity = 3 if metadata.is_critical else 2
-            return {"parity_disks": parity}
+        # XOR-parity removed; unsupported algorithm will raise below
         
         else:
             raise ValueError(f"Unknown algorithm: {algorithm}")
     
-    def _estimate_cost(self, algorithm: str, metadata: FileMetadata) -> float:
+    def _estimate_cost(self, algorithm: str, metadata: FileMetadata, compress: bool = False) -> float:
         """
         Estimate storage cost for an algorithm.
         
@@ -204,9 +243,9 @@ class SmartStorageEngine:
         if metadata.size > 1_000_000_000:  # > 1GB
             base_cost *= 0.9
         
-        # Compressible files might benefit from compression (reduce cost)
-        if metadata.is_compressible:
-            base_cost *= 0.8
+        # If compression will be applied, reduce estimated storage cost
+        if compress or metadata.is_compressible:
+            base_cost *= 0.7
         
         return round(base_cost, 2)
     
@@ -235,13 +274,7 @@ class SmartStorageEngine:
                 "best_for": "Medium files with good cost/reliability balance",
                 "complexity": "Medium",
             },
-            "xor-parity": {
-                "description": "XOR-based parity for cost-effective redundancy",
-                "overhead": "~1.5x to 2x storage depending on parity disks",
-                "recovery": "Can recover from parity_disks failures",
-                "best_for": "Large files, cost-optimized storage",
-                "complexity": "Medium",
-            },
+            # XOR-parity removed from available algorithms
         }
         
         return info_map.get(algorithm, {})

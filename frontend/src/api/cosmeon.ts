@@ -38,3 +38,11 @@ export async function reconstructFile(fileId: string) {
   const res = await cosmeonAPI.get(`/file/${fileId}/reconstruct`);
   return res.data;
 }
+
+// --------------------
+// Delete file
+// --------------------
+export async function deleteFile(fileId: string) {
+  const res = await cosmeonAPI.delete(`/file/${fileId}`);
+  return res.data;
+}

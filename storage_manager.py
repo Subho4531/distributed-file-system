@@ -1,8 +1,7 @@
 import os
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import uuid
 import httpx
 from datetime import datetime
 
@@ -47,10 +46,10 @@ class SupabaseStorageManager:
                             "allowed_mime_types": ["image/*", "video/*", "application/*", "text/*"]
                         }
                     )
-                    print(f"✓ Created bucket: {bucket_name}")
+                    print(f"Created bucket: {bucket_name}")
                 except Exception as e:
-                    print(f"⚠ Could not create bucket {bucket_name}: {e}")
-    
+                    print(f"Could not create bucket {bucket_name}: {e}")
+
     def upload_shard(self, bucket_name: str, shard_data: bytes, 
                     file_id: str, shard_index: int) -> Dict:
         """
@@ -157,46 +156,126 @@ class SupabaseStorageManager:
                 "cost_estimate": metadata.get("cost_estimate", 0),
                 "user_id": metadata.get("user_id", "demo")
             }
-            
-            response = self.client.table("files").insert(data).execute()
+            self.client.table("files").insert(data).execute()
             return True
         except Exception as e:
             print(f"Error storing metadata: {e}")
-            # Fallback: Store in a metadata bucket
-            try:
-                self.upload_shard(
-                    "cosmeon-metadata",
-                    str(metadata).encode('utf-8'),
-                    file_id,
-                    999  # Special index for metadata
-                )
-                return True
-            except:
-                return False
+            return False
     
     def get_metadata(self, file_id: str) -> Optional[Dict]:
-        """Retrieve file metadata"""
+        """Retrieve file metadata from database"""
         try:
             response = self.client.table("files").select("*").eq("id", file_id).execute()
             if response.data:
                 return response.data[0]
-        except:
+        except Exception:
             pass
         
-        # Try to fetch from metadata bucket
+        # Try admin client if regular client fails
         try:
-            shard_url = f"https://{self.url}/storage/v1/object/public/cosmeon-metadata/shard/{file_id}_shard_999.cosm"
-            data = self.download_shard(shard_url)
-            import json
-            return json.loads(data.decode('utf-8'))
-        except:
-            return None
+            response = self.admin_client.table("files").select("*").eq("id", file_id).execute()
+            if response.data:
+                return response.data[0]
+        except Exception:
+            pass
+        
+        return None
 
     def list_files_metadata(self) -> List[Dict]:
         """Fetch all file metadata from the database"""
         try:
             response = self.client.table("files").select("*").execute()
-            return response.data if response.data else []
+            if response.data:
+                return self._normalize_file_records(response.data)
+        except Exception:
+            pass
+        
+        # Try admin client if regular client fails
+        try:
+            response = self.admin_client.table("files").select("*").execute()
+            if response.data:
+                return self._normalize_file_records(response.data)
+        except Exception:
+            pass
+        
+        return []
+    
+    def _normalize_file_records(self, records: List[Dict]) -> List[Dict]:
+        """Normalize file records to consistent format"""
+        normalized = []
+        for rec in records:
+            algo = rec.get("algorithm") or rec.get("algorithm_used")
+            cfg = rec.get("config") or rec.get("algorithm_config") or {}
+            shards = rec.get("shards") or []
+            normalized.append({
+                "id": rec.get("id"),
+                "filename": rec.get("filename") or rec.get("id"),
+                "original_size": rec.get("original_size") or rec.get("size") or 0,
+                "algorithm": algo,
+                "config": cfg,
+                "shards": shards,
+                "cost_estimate": rec.get("cost_estimate"),
+                "uploaded_at": rec.get("created_at") or rec.get("uploaded_at")
+            })
+        return normalized
+
+    def delete_metadata(self, file_id: str):
+        """Delete file metadata from the database"""
+        try:
+            self.client.table("files").delete().eq("id", file_id).execute()
         except Exception as e:
-            print(f"Error listing files: {e}")
-            return []
+            # Try admin client if regular client fails
+            try:
+                self.admin_client.table("files").delete().eq("id", file_id).execute()
+            except Exception as e2:
+                raise Exception(f"Failed to delete metadata: {e2}")
+
+    def delete_shards_by_file_id(self, file_id: str) -> int:
+        """Delete all shards across buckets matching a given file_id. Returns number deleted."""
+        deleted = 0
+        for bucket in self.buckets:
+            try:
+                # list files under shards/ and delete those that match the file_id prefix
+                files = self.client.storage.from_(bucket).list(path="shards")
+                if not files:
+                    files = self.client.storage.from_(bucket).list()
+                # files may be list of objects with 'name' or simple strings depending on SDK
+                names = []
+                for f in files:
+                    if isinstance(f, dict) and f.get("name"):
+                        names.append(f.get("name"))
+                    elif hasattr(f, "name"):
+                        names.append(getattr(f, "name"))
+                    elif isinstance(f, str):
+                        names.append(f)
+
+                targets = [n for n in names if n.startswith(f"{file_id}_shard_")]
+                # Prepend path if the list returns base names
+                targets = ["shards/" + t if not t.startswith("shards/") else t for t in targets]
+                if targets:
+                    # remove expects list of paths relative to bucket root
+                    self.client.storage.from_(bucket).remove(targets)
+                    deleted += len(targets)
+            except Exception as e:
+                print(f"Error while deleting shards in {bucket}: {e}")
+                # try admin client fallback
+                try:
+                    files = self.admin_client.storage.from_(bucket).list(path="shards")
+                    if not files:
+                        files = self.admin_client.storage.from_(bucket).list()
+                    names = []
+                    for f in files:
+                        if isinstance(f, dict) and f.get("name"):
+                            names.append(f.get("name"))
+                        elif hasattr(f, "name"):
+                            names.append(getattr(f, "name"))
+                        elif isinstance(f, str):
+                            names.append(f)
+                    targets = [n for n in names if n.startswith(f"{file_id}_shard_")]
+                    targets = ["shards/" + t if not t.startswith("shards/") else t for t in targets]
+                    if targets:
+                        self.admin_client.storage.from_(bucket).remove(targets)
+                        deleted += len(targets)
+                except Exception as e2:
+                    print(f"Admin fallback failed for {bucket}: {e2}")
+        return deleted

@@ -119,39 +119,45 @@ class SimpleReedSolomon:
 
 
 class GaloisField:
-    """Simple Galois Field (2^8) for Reed-Solomon arithmetic."""
-    
-    def __init__(self, size: int = 256):
+    """Galois Field GF(2^8) arithmetic using lookup tables."""
+
+    def __init__(self, size: int = 256, primitive: int = 0x11D):
+        # size should be 256 for GF(2^8); field order is 255
         self.size = size
-        self.generator = 0x1d  # Primitive polynomial for GF(256)
+        self.order = size - 1
+        self.primitive = primitive  # Standard primitive polynomial for GF(256)
         self.log_table = [0] * size
         self.exp_table = [0] * size
         self._generate_tables()
-    
+
     def _generate_tables(self):
-        """Generate logarithm and exponential tables."""
-        self.exp_table[0] = 1
-        for i in range(1, self.size):
-            self.exp_table[i] = self.exp_table[i - 1] * 2
-            if self.exp_table[i] >= self.size:
-                self.exp_table[i] ^= self.generator
-        
-        for i in range(self.size):
-            self.log_table[self.exp_table[i]] = i
-    
+        """Generate log and exponential tables for GF(256)."""
+        # exp[i] = α^i, log[α^i] = i, where α is a primitive element
+        x = 1
+        for i in range(self.order):  # 0..254
+            self.exp_table[i] = x
+            self.log_table[x] = i
+            x <<= 1  # multiply by α (which is 2 in this representation)
+            if x & 0x100:  # overflow beyond 8 bits
+                x ^= self.primitive  # reduce modulo primitive polynomial
+            x &= 0xFF  # keep within 8 bits
+        # Optionally set the last entry to wrap-around (α^255 == 1)
+        self.exp_table[self.order] = 1
+        self.log_table[0] = -1  # undefined; used only when input is zero
+
     def mul(self, a: int, b: int) -> int:
         """Multiply two elements in GF(256)."""
         if a == 0 or b == 0:
             return 0
-        return self.exp_table[(self.log_table[a] + self.log_table[b]) % (self.size - 1)]
-    
+        return self.exp_table[(self.log_table[a] + self.log_table[b]) % self.order]
+
     def div(self, a: int, b: int) -> int:
         """Divide a by b in GF(256)."""
         if b == 0:
             raise ValueError("Division by zero")
         if a == 0:
             return 0
-        return self.exp_table[(self.log_table[a] - self.log_table[b]) % (self.size - 1)]
+        return self.exp_table[(self.log_table[a] - self.log_table[b]) % self.order]
 
 
 def encode_with_reed_solomon(data: bytes, k: int = 3, m: int = 2) -> List[bytes]:
@@ -326,3 +332,18 @@ def compute_shard_hash(shard_data: bytes) -> str:
 def verify_shard_integrity(shard_data: bytes, expected_hash: str) -> bool:
     """Verify shard integrity using stored hash."""
     return compute_shard_hash(shard_data) == expected_hash
+
+
+# ============================================================================
+# COMPRESSION HELPERS
+# ============================================================================
+def compress_bytes(data: bytes, level: int = 6) -> bytes:
+    """Compress bytes using zlib (returns compressed data)."""
+    import zlib
+    return zlib.compress(data, level)
+
+
+def decompress_bytes(data: bytes) -> bytes:
+    """Decompress bytes previously compressed with `compress_bytes`."""
+    import zlib
+    return zlib.decompress(data)

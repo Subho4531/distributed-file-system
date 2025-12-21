@@ -1,21 +1,28 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import uuid
 import asyncio
 from datetime import datetime
+import tempfile
+import os
+import zlib
 
 from storage_manager import SupabaseStorageManager
-from smart_engine import SmartStorageEngine  # Your earlier implementation
-from algorithms import (  # We'll create this next
+from smart_engine import SmartStorageEngine
+from algorithms import (
     encode_with_replication,
     encode_with_reed_solomon,
-    encode_with_xor_parity,
-    decode_file
+    decode_file,
+    decompress_bytes
 )
 
-app = FastAPI(title="COSMEON Storage API", version="1.0.0")
+app = FastAPI(
+    title="COSMEON Distributed Storage API",
+    version="1.0.0",
+    description="Intelligent distributed file storage with erasure coding and replication"
+)
 
 # CORS middleware
 app.add_middleware(
@@ -30,6 +37,7 @@ app.add_middleware(
 storage = SupabaseStorageManager()
 engine = SmartStorageEngine()
 
+# Response models
 class UploadResponse(BaseModel):
     file_id: str
     algorithm: str
@@ -37,116 +45,107 @@ class UploadResponse(BaseModel):
     storage_cost: float
     can_survive_failures: int
 
-class NodeStatus(BaseModel):
-    node_id: str
-    status: str
-    files_count: int
-    last_checked: datetime
+class FileStatusResponse(BaseModel):
+    file_id: str
+    filename: str
+    algorithm: str
+    shard_status: List[dict]
+    online_shards: int
+    needed_shards: int
+    reconstructable: bool
+    health: str
 
-@app.get("/")
-async def root():
-    """Health check endpoint"""
+class NodeStatusResponse(BaseModel):
+    total_nodes: int
+    online_nodes: int
+    nodes: List[dict]
+
+@app.get("/", tags=["Health"])
+async def health_check():
+    """API health check and service information"""
     return {
-        "service": "COSMEON Storage API",
+        "service": "COSMEON Distributed Storage API",
         "version": "1.0.0",
         "status": "operational",
-        "nodes": len(storage.buckets)
+        "storage_nodes": len(storage.buckets),
+        "algorithms": ["replication", "reed-solomon"],
+        "policies": ["balanced", "cost", "reliability", "eco"]
     }
 
-@app.get("/nodes/status")
+@app.get("/nodes/status", response_model=NodeStatusResponse, tags=["Nodes"])
 async def get_nodes_status():
-    """Get status of all storage nodes"""
+    """Get status and health of all storage nodes"""
     status = storage.get_bucket_status()
     
-    # Format response
     nodes = []
     for bucket_name, info in status.items():
         nodes.append({
             "node_id": bucket_name,
             "status": info["status"],
             "files_count": info["file_count"],
-            "capacity": info.get("capacity", "unlimited"),
+            "capacity": info.get("capacity", "50GB"),
             "last_checked": datetime.utcnow().isoformat()
         })
     
-    return {
-        "total_nodes": len(nodes),
-        "online_nodes": sum(1 for n in nodes if n["status"] == "online"),
-        "nodes": nodes
-    }
+    return NodeStatusResponse(
+        total_nodes=len(nodes),
+        online_nodes=sum(1 for n in nodes if n["status"] == "online"),
+        nodes=nodes
+    )
 
-@app.post("/upload", response_model=UploadResponse)
+@app.post("/upload", response_model=UploadResponse, tags=["Files"])
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     algorithm: Optional[str] = None,
     policy: str = "balanced"
 ):
     """
-    Upload a file with intelligent storage selection
+    Upload a file with intelligent storage distribution
     
-    - If algorithm is specified, use it
-    - Otherwise, use smart engine to choose best algorithm
+    **Parameters:**
+    - **file**: File to upload (multipart/form-data)
+    - **algorithm**: Storage algorithm ("replication", "reed-solomon", or "auto")
+    - **policy**: Selection policy ("balanced", "cost", "reliability", "eco")
+    
+    **Returns:**
+    - File ID, algorithm used, shard information, and failure tolerance
     """
-    # Read file
+    # Parse form data for additional parameters
+    try:
+        form = await request.form()
+        algorithm = form.get("algorithm", algorithm)
+        policy = form.get("policy", policy)
+    except Exception:
+        pass
+
+    # Read and validate file
     contents = await file.read()
-    file_size = len(contents)
+    if not contents:
+        raise HTTPException(400, "Empty file uploaded")
     
-    # Generate unique file ID
+    file_size = len(contents)
     file_id = str(uuid.uuid4())
     
-    # Analyze file metadata
-    metadata = engine.analyze_file(file.filename)
+    # Analyze file characteristics
+    metadata = engine.analyze_file(file.filename or "unknown")
     metadata.size = file_size
     
-    # Determine algorithm
-    if algorithm:
-        # Use specified algorithm
-        decision = {
-            "algorithm": algorithm,
-            "config": engine._configure_algorithm(algorithm, metadata),
-            "reasoning": f"User specified {algorithm}",
-            "cost_estimate": engine._estimate_cost(algorithm, metadata)
-        }
-    else:
-        # Use smart selection
-        decision = engine.select_algorithm(metadata, policy)
+    # Process algorithm selection
+    decision = _process_algorithm_selection(algorithm, metadata, policy)
     
-    # Encode file based on algorithm
-    if decision["algorithm"] == "replication":
-        shard_data_list = encode_with_replication(
-            contents, 
-            decision["config"].get("replication_factor", 3)
-        )
-    elif decision["algorithm"] == "reed-solomon":
-        k = decision["config"].get("k", 3)
-        m = decision["config"].get("m", 2)
-        shard_data_list = encode_with_reed_solomon(contents, k, m)
-    elif decision["algorithm"] == "xor-parity":
-        shard_data_list = encode_with_xor_parity(
-            contents,
-            decision["config"].get("parity_disks", 2)
-        )
-    else:
-        raise HTTPException(400, f"Unknown algorithm: {decision['algorithm']}")
+    # Apply compression if needed
+    if decision["config"].get("compress"):
+        contents = zlib.compress(contents)
+        file_size = len(contents)
+
+    # Encode file into shards
+    shard_data_list = _encode_file(contents, decision)
     
-    # Upload shards to distributed nodes
-    shard_metadata = []
-    for i, shard_data in enumerate(shard_data_list):
-        # Distribute across buckets (round-robin)
-        bucket_index = i % len(storage.buckets)
-        bucket_name = storage.buckets[bucket_index]
-        
-        # Upload shard
-        shard_info = storage.upload_shard(
-            bucket_name=bucket_name,
-            shard_data=shard_data,
-            file_id=file_id,
-            shard_index=i
-        )
-        
-        shard_metadata.append(shard_info)
+    # Distribute shards across storage nodes
+    shard_metadata = _distribute_shards(shard_data_list, file_id)
     
-    # Store file metadata
+    # Store metadata in database
     full_metadata = {
         "filename": file.filename,
         "original_size": file_size,
@@ -154,21 +153,14 @@ async def upload_file(
         "config": decision["config"],
         "shards": shard_metadata,
         "cost_estimate": decision["cost_estimate"],
-        "policy_used": policy,
-        "uploaded_at": datetime.utcnow().isoformat()
+        "policy_used": policy
     }
     
-    storage.store_metadata(file_id, full_metadata)
+    if not storage.store_metadata(file_id, full_metadata):
+        raise HTTPException(500, "Failed to store file metadata")
     
-    # Calculate survivability
-    if decision["algorithm"] == "replication":
-        factor = decision["config"].get("replication_factor", 3)
-        can_survive = factor - 1
-    elif decision["algorithm"] == "reed-solomon":
-        m = decision["config"].get("m", 2)
-        can_survive = m
-    else:  # xor-parity
-        can_survive = decision["config"].get("parity_disks", 2)
+    # Calculate failure tolerance
+    can_survive = _calculate_failure_tolerance(decision)
     
     return UploadResponse(
         file_id=file_id,
@@ -178,16 +170,148 @@ async def upload_file(
         can_survive_failures=can_survive
     )
 
-@app.get("/file/{file_id}/reconstruct")
-async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
-    """Reconstruct a file from distributed shards"""
+def _process_algorithm_selection(algorithm: Optional[str], metadata, policy: str) -> dict:
+    """Process algorithm selection and return decision"""
+    compress_flag = False
     
-    # Get file metadata
+    if algorithm:
+        alg_raw = algorithm.lower()
+        if "+compress" in alg_raw:
+            compress_flag = True
+            alg_raw = alg_raw.replace("+compress", "")
+
+        if alg_raw in ("auto", "none", ""):
+            algorithm = None
+        elif "reed" in alg_raw and ("solomon" in alg_raw or "solo" in alg_raw):
+            algorithm = "reed-solomon"
+        elif alg_raw in ("replication", "replicate"):
+            algorithm = "replication"
+
+    if algorithm:
+        config = engine._configure_algorithm(algorithm, metadata)
+        if compress_flag:
+            config["compress"] = True
+        
+        return {
+            "algorithm": algorithm,
+            "config": config,
+            "reasoning": f"User specified {algorithm}",
+            "cost_estimate": engine._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
+        }
+    else:
+        return engine.select_algorithm(metadata, policy)
+
+def _encode_file(contents: bytes, decision: dict) -> List[bytes]:
+    """Encode file into shards based on algorithm"""
+    algorithm = decision["algorithm"]
+    config = decision["config"]
+    
+    if algorithm == "replication":
+        return encode_with_replication(contents, config.get("replication_factor", 3))
+    elif algorithm == "reed-solomon":
+        k = config.get("k", 3)
+        m = config.get("m", 2)
+        return encode_with_reed_solomon(contents, k, m)
+    else:
+        raise HTTPException(400, f"Unknown algorithm: {algorithm}")
+
+def _distribute_shards(shard_data_list: List[bytes], file_id: str) -> List[dict]:
+    """Distribute shards across storage nodes"""
+    shard_metadata = []
+    for i, shard_data in enumerate(shard_data_list):
+        bucket_index = i % len(storage.buckets)
+        bucket_name = storage.buckets[bucket_index]
+        
+        shard_info = storage.upload_shard(
+            bucket_name=bucket_name,
+            shard_data=shard_data,
+            file_id=file_id,
+            shard_index=i
+        )
+        shard_metadata.append(shard_info)
+    
+    return shard_metadata
+
+def _calculate_failure_tolerance(decision: dict) -> int:
+    """Calculate how many node failures the file can survive"""
+    algorithm = decision["algorithm"]
+    config = decision["config"]
+    
+    if algorithm == "replication":
+        return config.get("replication_factor", 3) - 1
+    elif algorithm == "reed-solomon":
+        return config.get("m", 2)
+    else:
+        return 0
+
+@app.get("/files", tags=["Files"])
+async def list_files():
+    """List all uploaded files with metadata"""
+    return storage.list_files_metadata()
+
+@app.get("/file/{file_id}/status", response_model=FileStatusResponse, tags=["Files"])
+async def get_file_status(file_id: str):
+    """Get detailed status and health of a specific file"""
     metadata = storage.get_metadata(file_id)
     if not metadata:
         raise HTTPException(404, f"File {file_id} not found")
     
-    # Download all available shards
+    # Check shard availability
+    shard_status = []
+    for shard in metadata["shards"]:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.head(shard["url"])
+                status = "online" if response.status_code == 200 else "offline"
+        except:
+            status = "offline"
+        
+        shard_status.append({
+            "shard_index": shard["shard_index"],
+            "bucket": shard["bucket"],
+            "status": status,
+            "size": shard.get("size", 0)
+        })
+    
+    # Calculate health metrics
+    online_shards = sum(1 for s in shard_status if s["status"] == "online")
+    algorithm = metadata.get("algorithm_used") or metadata.get("algorithm")
+    config = metadata.get("algorithm_config") or metadata.get("config", {})
+    
+    if algorithm == "replication":
+        needed = 1
+    elif algorithm == "reed-solomon":
+        needed = config.get("k", 3)
+    else:
+        needed = 1
+    
+    reconstructable = online_shards >= needed
+    if reconstructable:
+        health = "healthy"
+    elif online_shards > 0:
+        health = "degraded"
+    else:
+        health = "critical"
+    
+    return FileStatusResponse(
+        file_id=file_id,
+        filename=metadata.get("filename", "unknown"),
+        algorithm=algorithm,
+        shard_status=shard_status,
+        online_shards=online_shards,
+        needed_shards=needed,
+        reconstructable=reconstructable,
+        health=health
+    )
+@app.get("/file/{file_id}/reconstruct", tags=["Files"])
+async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
+    """Reconstruct and download a file from distributed shards"""
+    metadata = storage.get_metadata(file_id)
+    if not metadata:
+        raise HTTPException(404, f"File {file_id} not found")
+    
+    # Download available shards
     shard_data_list = []
     missing_indices = []
     
@@ -201,30 +325,34 @@ async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
     
     # Reconstruct file
     try:
-        if metadata["algorithm"] == "replication":
-            # For replication, any shard has full data
+        algorithm = metadata.get("algorithm_used") or metadata.get("algorithm")
+        config = metadata.get("algorithm_config") or metadata.get("config", {})
+        
+        if algorithm == "replication":
+            # Use any available shard
+            reconstructed = None
             for idx, data in shard_data_list:
                 if data:
-                    reconstructed = data  # All shards have full file
+                    reconstructed = data
                     break
-        elif metadata["algorithm"] == "reed-solomon":
-            k = metadata["config"].get("k", 3)
-            m = metadata["config"].get("m", 2)
-            reconstructed = decode_file(
-                shard_data_list, 
-                algorithm="reed-solomon",
-                k=k, m=m
-            )
-        elif metadata["algorithm"] == "xor-parity":
-            reconstructed = decode_file(
-                shard_data_list,
-                algorithm="xor-parity"
-            )
+            if not reconstructed:
+                raise HTTPException(500, "No valid shards available")
+                
+        elif algorithm == "reed-solomon":
+            k = config.get("k", 3)
+            m = config.get("m", 2)
+            reconstructed = decode_file(shard_data_list, algorithm="reed-solomon", k=k, m=m)
         else:
-            raise HTTPException(400, f"Unknown algorithm: {metadata['algorithm']}")
+            raise HTTPException(500, f"Unknown algorithm: {algorithm}")
         
-        # Store reconstructed file temporarily (in production, use S3 presigned URL)
-        temp_filename = f"/tmp/reconstructed_{file_id}_{metadata['filename']}"
+        # Decompress if needed
+        if config.get("compress"):
+            reconstructed = decompress_bytes(reconstructed)
+
+        # Save to temporary file
+        temp_dir = tempfile.gettempdir()
+        temp_filename = os.path.join(temp_dir, f"reconstructed_{file_id}_{metadata.get('filename', 'file')}")
+        
         with open(temp_filename, "wb") as f:
             f.write(reconstructed)
         
@@ -233,83 +361,119 @@ async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
         
         return {
             "file_id": file_id,
-            "filename": metadata["filename"],
+            "filename": metadata.get("filename", "unknown"),
             "reconstructed_size": len(reconstructed),
             "missing_shards": missing_indices,
             "reconstruction_time": datetime.utcnow().isoformat(),
-            "download_url": f"/download/{file_id}"  # You'd implement this separately
+            "temp_path": temp_filename
         }
         
     except Exception as e:
         raise HTTPException(500, f"Reconstruction failed: {str(e)}")
 
-async def cleanup_temp_file(filepath: str):
-    """Clean up temporary file after delay"""
-    await asyncio.sleep(300)  # 5 minutes
-    import os
-    if os.path.exists(filepath):
-        os.remove(filepath)
-
-@app.get("/files")
-async def list_files():
-    """List all uploaded files"""
-    files = storage.list_files_metadata()
-    return files
-
-@app.get("/file/{file_id}/status")
-async def get_file_status(file_id: str):
-    """Check status of a file's shards"""
-    
+@app.delete("/file/{file_id}", tags=["Files"])
+async def delete_file(file_id: str):
+    """Delete a specific file and all its shards"""
     metadata = storage.get_metadata(file_id)
     if not metadata:
         raise HTTPException(404, f"File {file_id} not found")
     
-    # Check each shard
-    shard_status = []
-    for shard in metadata["shards"]:
+    deleted_count = 0
+    errors = []
+
+    # Delete shards
+    for shard in metadata.get("shards", []):
         try:
-            # Try to download a small portion
-            import httpx
-            async with httpx.AsyncClient() as client:
-                response = await client.head(shard["url"])
-                status = "online" if response.status_code == 200 else "offline"
-        except:
-            status = "offline"
-        
-        shard_status.append({
-            "shard_index": shard["shard_index"],
-            "bucket": shard["bucket"],
-            "url": shard["url"],
-            "status": status,
-            "size": shard.get("size", 0)
-        })
-    
-    # Calculate survivability
-    online_shards = sum(1 for s in shard_status if s["status"] == "online")
-    algorithm = metadata["algorithm"]
-    config = metadata["config"]
-    
-    if algorithm == "replication":
-        needed = 1
-        can_survive = config.get("replication_factor", 3) - 1
-    elif algorithm == "reed-solomon":
-        needed = config.get("k", 3)
-        can_survive = config.get("m", 2)
-    else:  # xor-parity
-        needed = len(shard_status) - config.get("parity_disks", 2)
-        can_survive = config.get("parity_disks", 2)
-    
+            bucket = shard.get("bucket")
+            filename = shard.get("filename")
+            if bucket and filename:
+                success = storage.delete_shard(bucket, f"shards/{filename}")
+                if success:
+                    deleted_count += 1
+                else:
+                    errors.append(f"Failed to delete shard {filename}")
+        except Exception as e:
+            errors.append(f"Error deleting shard: {str(e)}")
+
+    # Delete any remaining shards
+    try:
+        extra_deleted = storage.delete_shards_by_file_id(file_id)
+        deleted_count += extra_deleted
+    except Exception as e:
+        errors.append(f"Error in cleanup: {str(e)}")
+
+    # Delete metadata
+    try:
+        storage.delete_metadata(file_id)
+    except Exception as e:
+        errors.append(f"Error deleting metadata: {str(e)}")
+
     return {
         "file_id": file_id,
-        "filename": metadata["filename"],
-        "algorithm": algorithm,
-        "shard_status": shard_status,
-        "online_shards": online_shards,
-        "needed_shards": needed,
-        "can_survive_more": max(0, online_shards - needed),
-        "reconstructable": online_shards >= needed,
-        "health": "healthy" if online_shards >= needed else "degraded" if online_shards >= needed - can_survive else "critical"
+        "status": "deleted",
+        "shards_deleted": deleted_count,
+        "errors": errors if errors else None
     }
+
+@app.delete("/files", tags=["Files"])
+async def delete_all_files():
+    """Delete all files and shards from the storage cluster"""
+    all_files = storage.list_files_metadata()
+    report = {
+        "total_files": len(all_files),
+        "deleted_files": 0,
+        "shards_deleted": 0,
+        "errors": []
+    }
+
+    for file_entry in all_files:
+        try:
+            file_id = file_entry.get("id")
+            if not file_id:
+                continue
+
+            # Delete shards
+            deleted_shards = 0
+            for shard in file_entry.get("shards", []):
+                try:
+                    bucket = shard.get("bucket")
+                    filename = shard.get("filename")
+                    if bucket and filename:
+                        success = storage.delete_shard(bucket, f"shards/{filename}")
+                        if success:
+                            deleted_shards += 1
+                except Exception as e:
+                    report["errors"].append({"file_id": file_id, "error": str(e)})
+
+            # Cleanup any remaining shards
+            try:
+                extra_deleted = storage.delete_shards_by_file_id(file_id)
+                deleted_shards += extra_deleted
+            except Exception as e:
+                report["errors"].append({"file_id": file_id, "error": str(e)})
+
+            # Delete metadata
+            try:
+                storage.delete_metadata(file_id)
+            except Exception as e:
+                report["errors"].append({"file_id": file_id, "error": str(e)})
+
+            report["deleted_files"] += 1
+            report["shards_deleted"] += deleted_shards
+
+        except Exception as e:
+            report["errors"].append({"file_entry": file_entry, "error": str(e)})
+
+    return report
+
+async def cleanup_temp_file(filepath: str):
+    """Clean up temporary file after delay"""
+    await asyncio.sleep(300)  # 5 minutes
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     import uvicorn

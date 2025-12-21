@@ -38,6 +38,10 @@ export default function Upload() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("policy", policy);
+    // Only send explicit algorithm when user selected one (not Smart Engine auto)
+    if (selectedAlgo && selectedAlgo !== "auto") {
+      formData.append("algorithm", selectedAlgo);
+    }
 
     setLoading(true);
     setResult(null);
@@ -56,13 +60,11 @@ export default function Upload() {
     { id: "auto", label: "Smart Engine", icon: Zap, color: "blue", desc: "Auto-select best protocol" },
     { id: "replication", label: "Replication", icon: Shield, color: "emerald", desc: "Mirror data across nodes" },
     { id: "reed-solomon", label: "Reed-Solomon", icon: Cpu, color: "purple", desc: "Advanced parity fragments" },
-    { id: "xor-parity", label: "XOR-Parity", icon: Activity, color: "amber", desc: "Efficient bitwise distribution" },
   ];
 
   const policies = [
     { id: "balanced", label: "Balanced", icon: Shield, color: "blue", desc: "Optimal performance & safety" },
     { id: "cost", label: "Economy", icon: DollarSign, color: "green", desc: "Minimal storage expenditure" },
-    { id: "reliability", label: "Fortress", icon: Zap, color: "purple", desc: "Maximum redundancy levels" },
   ];
 
   const onDragOver = (e: React.DragEvent) => {
@@ -153,12 +155,14 @@ export default function Upload() {
                 return (
                   <button
                     key={p.id}
-                    onClick={() => setPolicy(p.id)}
+                    onClick={() => selectedAlgo === "auto" && setPolicy(p.id)}
+                    disabled={selectedAlgo !== "auto"}
                     className={cn(
                       "w-full text-left p-4 rounded-2xl border transition-all duration-300 relative group overflow-hidden",
                       isActive
                         ? "bg-slate-900 border-blue-500/50 shadow-lg shadow-blue-500/5"
-                        : "bg-transparent border-white/5 hover:border-white/10"
+                        : "bg-transparent border-white/5 hover:border-white/10",
+                      selectedAlgo !== "auto" ? "opacity-50 cursor-not-allowed" : ""
                     )}
                   >
                     <div className="flex items-center space-x-4 relative z-10">
