@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Shield, Cpu, Activity, Database, CheckCircle2 } from "lucide-react";
+import { Shield, Cpu, Database, CheckCircle2 } from "lucide-react";
 
 export default function Comparison() {
     const algorithms = [
@@ -8,33 +8,22 @@ export default function Comparison() {
             name: "Replication",
             icon: Shield,
             color: "emerald",
-            storage: "3.0x",
+            storage: "3.0x (2.1x compressed)",
             recovery: "Highly Resilient",
             compute: "Near Zero",
             bestFor: "Small metadata, high-access files",
-            details: "Multiplies data shards across independent nodes. If any one node survives, data is safe."
+            details: "Multiplies data shards across independent nodes. Optional compression reduces overhead by ~30%. If any one node survives, data is safe."
         },
         {
             id: "reed-solomon",
             name: "Reed-Solomon",
             icon: Cpu,
             color: "blue",
-            storage: "1.5x - 1.8x",
+            storage: "1.67x (1.2x compressed)",
             recovery: "Tunable Safety",
             compute: "High (Matrix Math)",
             bestFor: "Large files, long-term archival",
-            details: "Uses Cauchy-Vandermonde matrices to create 'erasure shards'. Can lose M shards and still recover."
-        },
-        {
-            id: "xor-parity",
-            name: "XOR-Parity",
-            icon: Activity,
-            color: "purple",
-            storage: "1.2x - 1.4x",
-            recovery: "Standard Safety",
-            compute: "Moderate",
-            bestFor: "Balanced workloads, clusters > 5 nodes",
-            details: "Computes bitwise parity across groups of data. Efficient and provides simple recovery logic."
+            details: "Uses Cauchy-Vandermonde matrices to create 'erasure shards'. Compression reduces storage by ~30%. Can lose M shards and still recover."
         }
     ];
 
@@ -50,7 +39,7 @@ export default function Comparison() {
                 </p>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-4xl mx-auto">
                 {algorithms.map((algo, i) => (
                     <motion.div
                         key={algo.id}
@@ -87,6 +76,10 @@ export default function Comparison() {
                                     <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Resilience</span>
                                     <span className="text-xs font-bold text-emerald-400">{algo.recovery}</span>
                                 </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Compression</span>
+                                    <span className="text-xs font-bold text-blue-400">~30% Reduction</span>
+                                </div>
                             </div>
 
                             <div className="flex items-start space-x-3 p-4 border border-white/5 rounded-2xl">
@@ -121,9 +114,10 @@ export default function Comparison() {
                     </thead>
                     <tbody className="divide-y divide-white/5">
                         {[
-                            { name: "Replication", efficiency: "33.3%", math: "Identity Mapping", tolerance: "N-1 Nodes" },
-                            { name: "Reed-Solomon (3+2)", efficiency: "60.0%", math: "Galois Field / Vandermonde", tolerance: "2 Nodes" },
-                            { name: "XOR-Parity (4+1)", efficiency: "80.0%", math: "Bitwise Disjunction", tolerance: "1 Node" }
+                            { name: "Replication (3x)", efficiency: "33.3%", math: "Identity Mapping", tolerance: "N-1 Nodes" },
+                            { name: "Replication + Compression", efficiency: "47.6%", math: "Identity + DEFLATE", tolerance: "N-1 Nodes" },
+                            { name: "Reed-Solomon (k=4, m=2)", efficiency: "66.7%", math: "Galois Field / Vandermonde", tolerance: "2 Nodes" },
+                            { name: "Reed-Solomon + Compression", efficiency: "83.3%", math: "Galois Field + DEFLATE", tolerance: "2 Nodes" }
                         ].map((row, i) => (
                             <tr key={i} className="group hover:bg-white/5 transition-colors">
                                 <td className="py-6 font-bold text-white">{row.name}</td>

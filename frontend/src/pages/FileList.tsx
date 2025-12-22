@@ -266,7 +266,7 @@ export default function FileList() {
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 py-4 border-y border-white/5">
+                    <div className="grid grid-cols-3 gap-4 py-4 border-y border-white/5">
                       <div className="space-y-1">
                         <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Size</p>
                         <p className="text-sm font-bold text-slate-300">{(file.original_size / 1024).toFixed(2)} KB</p>
@@ -274,6 +274,10 @@ export default function FileList() {
                       <div className="space-y-1">
                         <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Protocol</p>
                         <p className="text-sm font-bold text-blue-400 uppercase tracking-tighter">{file.algorithm || file.algorithm_used}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Overhead</p>
+                        <p className="text-sm font-bold text-amber-400">{file.cost_estimate || 'N/A'}x</p>
                       </div>
                     </div>
 
@@ -340,7 +344,7 @@ export default function FileList() {
                 </h2>
                 <button
                   onClick={() => setSelectedFileId(null)}
-                  className="p-2 hover:bg-white/10 rounded-xl transition-colors"
+                  className="p-2 z-50 hover:bg-white/10 rounded-xl transition-colors"
                 >
                   <X className="w-5 h-5 text-slate-400" />
                 </button>

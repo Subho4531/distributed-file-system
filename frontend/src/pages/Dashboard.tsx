@@ -55,6 +55,11 @@ export default function Dashboard() {
     return sum + used;
   }, 0) || 0;
   const clusterUtilization = totalStorage > 0 ? (usedStorage / totalStorage) * 100 : 0;
+  
+  // Calculate average storage overhead from files
+  const averageOverhead = files.length > 0 
+    ? files.reduce((sum, file) => sum + (file.cost_estimate || 0), 0) / files.length 
+    : 0;
 
   if (loading && !data) {
     return (
@@ -112,7 +117,7 @@ export default function Dashboard() {
               Distributed <span className="text-gradient">Intelligence</span>
             </h1>
             <p className="text-slate-400 text-lg max-w-xl">
-              COSMEON isn't just storage. It's a self-healing, intelligent cluster that fragments your data across global nodes using advanced parity logic.
+              ShardX isn't just storage. It's a self-healing, intelligent cluster that fragments your data across global nodes using advanced parity logic.
             </p>
           </div>
           <div className="flex flex-wrap gap-4">
@@ -229,18 +234,13 @@ export default function Dashboard() {
             <div className="p-2 bg-amber-500/10 rounded-xl">
               <Zap className="w-5 h-5 text-amber-400" />
             </div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Health</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Overhead</span>
           </div>
           <div>
-            <p className="text-2xl font-black text-emerald-400">
-              {data.total_nodes > 0 
-                ? data.online_nodes === data.total_nodes 
-                  ? "100%" 
-                  : `${Math.round((data.online_nodes / data.total_nodes) * 100)}%`
-                : "0%"
-              }
+            <p className="text-2xl font-black text-amber-400">
+              {averageOverhead > 0 ? `${averageOverhead.toFixed(1)}x` : "N/A"}
             </p>
-            <p className="text-xs text-slate-500">System Health</p>
+            <p className="text-xs text-slate-500">Avg Storage Cost</p>
           </div>
         </motion.div>
       </div>

@@ -87,24 +87,21 @@ class SmartStorageEngine:
         
         Args:
             metadata: FileMetadata object with file characteristics
-            policy: Selection policy ("cost", "reliability", "balanced")
+            policy: Selection policy ("cost"/"eco", "balanced")
             
         Returns:
             Decision dict with algorithm, config, reasoning, and cost estimate
         """
         policy_key = (policy or "").lower()
 
-        if policy_key == "eco":
+        # Map both "cost" and "eco" to the eco policy
+        if policy_key in ("eco", "cost", "economy"):
             return self._select_eco(metadata)
-        if policy_key == "cost":
-            return self._select_cost_optimized(metadata)
-        elif policy_key == "reliability":
-            return self._select_reliability_optimized(metadata)
         else:  # balanced (default)
             return self._select_balanced(metadata)
 
     def _select_eco(self, metadata: FileMetadata) -> Dict[str, Any]:
-        """Select algorithm prioritizing storage economy (eco).
+        """Select algorithm prioritizing storage economy (eco/cost policy).
 
         Eco follows smart selection but favors compression to reduce
         storage cost: small files -> replication+compress, medium/large
@@ -130,49 +127,6 @@ class SmartStorageEngine:
             "cost_estimate": cost,
         }
     
-    def _select_cost_optimized(self, metadata: FileMetadata) -> Dict[str, Any]:
-        """Select algorithm prioritizing cost."""
-        # For cost-sensitive (eco) policy we prefer compression and
-        # lower-overhead schemes. Small files can be replicated and
-        # compressed (cheap to manage), medium/large files use
-        # Reed-Solomon (with compression for very large files).
-        if metadata.size < 10_000_000:  # <10MB
-            algorithm = "replication"
-            config = {"replication_factor": 3, "compress": True}
-        elif metadata.size < 1_000_000_000:  # <1GB
-            algorithm = "reed-solomon"
-            config = {"k": 4, "m": 2, "compress": False}
-        else:
-            algorithm = "reed-solomon"
-            config = {"k": 4, "m": 2, "compress": True}
-        cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
-        
-        return {
-            "algorithm": algorithm,
-            "config": config,
-            "reasoning": "Cost-optimized: Reed-Solomon chosen for cost/reliability balance",
-            "cost_estimate": cost,
-        }
-    
-    def _select_reliability_optimized(self, metadata: FileMetadata) -> Dict[str, Any]:
-        """Select algorithm prioritizing reliability."""
-        # Critical files get full replication
-        if metadata.is_critical or metadata.size > 1_000_000_000:  # > 1GB
-            algorithm = "replication"
-            config = {"replication_factor": 4}
-        else:
-            algorithm = "reed-solomon"
-            config = {"k": 3, "m": 3}  # More parity blocks for better recovery
-        
-        cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
-        
-        return {
-            "algorithm": algorithm,
-            "config": config,
-            "reasoning": f"Reliability-optimized: {algorithm} for critical/large files",
-            "cost_estimate": cost,
-        }
-    
     def _select_balanced(self, metadata: FileMetadata) -> Dict[str, Any]:
         """Select algorithm balancing cost and reliability."""
         # Small files: replication (simpler, lower overhead for small sizes)
@@ -183,11 +137,10 @@ class SmartStorageEngine:
         elif metadata.size < 1_000_000_000:  # < 1GB
             algorithm = "reed-solomon"
             config = {"k": 4, "m": 2, "compress": False}  # 50% overhead, can recover from 2 failures
-        # Large files: XOR parity (cost-effective for large data)
+        # Large files: Reed-Solomon without compression for balanced policy
         else:
-            # For balanced policy prefer Reed-Solomon with compression for large files
             algorithm = "reed-solomon"
-            config = {"k": 4, "m": 2, "compress": True}
+            config = {"k": 4, "m": 2, "compress": False}  # No compression in balanced mode
         
         cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
         
@@ -233,6 +186,7 @@ class SmartStorageEngine:
         Args:
             algorithm: Algorithm name
             metadata: File metadata
+            compress: Whether compression is actually being applied
             
         Returns:
             Estimated cost (as a multiplier of base file size)
@@ -243,8 +197,8 @@ class SmartStorageEngine:
         if metadata.size > 1_000_000_000:  # > 1GB
             base_cost *= 0.9
         
-        # If compression will be applied, reduce estimated storage cost
-        if compress or metadata.is_compressible:
+        # Only apply compression discount if compression is actually being used
+        if compress:
             base_cost *= 0.7
         
         return round(base_cost, 2)

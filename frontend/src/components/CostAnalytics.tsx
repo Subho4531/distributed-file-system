@@ -14,7 +14,6 @@ export default function CostAnalytics({
   const algorithmConfig: Record<string, { icon: string; bgColor: string }> = {
     replication: { icon: "📋", bgColor: "bg-blue-500/20" },
     "reed-solomon": { icon: "🔢", bgColor: "bg-purple-500/20" },
-    "xor-parity": { icon: "🔀", bgColor: "bg-indigo-500/20" },
   };
 
   const config = algorithmConfig[algorithm] || { icon: "⚙️", bgColor: "bg-gray-500/20" };

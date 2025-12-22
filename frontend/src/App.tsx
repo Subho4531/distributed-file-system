@@ -62,7 +62,7 @@ function Navigation() {
               <Shield className="w-6 h-6" />
             </div>
             <span className="text-2xl font-bold tracking-tighter text-white group-hover:text-blue-400 transition-colors">
-              COSMEON
+              ShardX
             </span>
           </Link>
 
