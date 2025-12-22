@@ -1,5 +1,4 @@
-import { motion } from "framer-motion";
-import { Shield, Cpu, Code2, Database, Layers, Globe } from "lucide-react";
+import { Cpu, Code2, Database, Layers, Globe } from "lucide-react";
 
 export default function SystemInfo() {
     const stack = [

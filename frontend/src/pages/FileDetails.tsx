@@ -20,9 +20,7 @@ import {
   AlertCircle,
   FileSearch,
   ChevronRight,
-  Zap,
-  HardDrive,
-  Info
+  Zap
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
