@@ -1,5 +1,4 @@
 import { useState } from "react";
-import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "react-router-dom";
 import {
@@ -16,7 +15,7 @@ import {
   Activity,
   Database as DatabaseIcon
 } from "lucide-react";
-import { cosmeonAPI } from "../api/cosmeon";
+import { cosmeonAPI, fetchFileStatus } from "../api/cosmeon";
 import { cn } from "../lib/utils";
 
 export default function Upload() {

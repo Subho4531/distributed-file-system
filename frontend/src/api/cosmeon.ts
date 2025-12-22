@@ -1,6 +1,7 @@
 import axios from "axios";
 
-const API_BASE_URL = "https://distributed-file-system-41mt.vercel.app/";
+// Use environment variable or fallback to production URL
+const API_BASE_URL = import.meta.env.VITE_API_URL || "https://distributed-file-system-41mt.vercel.app/";
 
 export const cosmeonAPI = axios.create({
   baseURL: API_BASE_URL,
