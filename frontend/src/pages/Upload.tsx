@@ -16,10 +16,8 @@ import {
   Activity,
   Database as DatabaseIcon
 } from "lucide-react";
-import { fetchFileStatus } from "../api/cosmeon";
+import { cosmeonAPI } from "../api/cosmeon";
 import { cn } from "../lib/utils";
-
-const API_BASE = "http://localhost:8001";
 
 export default function Upload() {
   const [file, setFile] = useState<File | null>(null);
@@ -53,15 +51,14 @@ export default function Upload() {
       fileSize: file.size,
       policy,
       selectedAlgo,
-      apiBase: API_BASE,
       formDataEntries: Array.from(formData.entries())
     });
 
     setLoading(true);
     setResult(null);
     try {
-      console.log('Making upload request to:', `${API_BASE}/upload`);
-      const res = await axios.post(`${API_BASE}/upload`, formData, {
+      console.log('Making upload request to:', cosmeonAPI.defaults.baseURL + '/upload');
+      const res = await cosmeonAPI.post('/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
