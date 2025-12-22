@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "https://distributed-file-system-41mt.vercel.app/";
 
 export const cosmeonAPI = axios.create({
   baseURL: API_BASE_URL,
