@@ -17,7 +17,7 @@ import {
   CheckCircle2,
   Download
 } from "lucide-react";
-import { fetchFiles, fetchFileStatus, deleteFile, reconstructFile } from "../api/cosmeon";
+import { fetchFiles, fetchFileStatus, deleteFile, reconstructFile, getReconstructInfo } from "../api/cosmeon";
 import { cn } from "../lib/utils";
 
 export default function FileList() {
@@ -136,8 +136,44 @@ export default function FileList() {
     setReconstructing(fileId);
     setReconstructError(null);
     try {
-      const result = await reconstructFile(fileId);
-      alert(`File reconstructed successfully!\nSize: ${result.reconstructed_size} bytes\nMissing shards: ${result.missing_shards?.length || 0}`);
+      // First get reconstruction info
+      const info = await getReconstructInfo(fileId);
+      
+      // Show alert with reconstruction details
+      const message = `File Reconstruction Details:
+      
+Filename: ${info.filename}
+Algorithm: ${info.algorithm.toUpperCase()}
+Total Shards: ${info.total_shards}
+Available Shards: ${info.available_shards}
+Needed Shards: ${info.needed_shards}
+Missing Shards: ${info.missing_shards.length}
+Original Size: ${(info.original_size / 1024).toFixed(2)} KB
+
+${info.can_reconstruct ? 'File can be reconstructed successfully!' : 'Cannot reconstruct - insufficient shards available.'}
+
+Click OK to download the reconstructed file.`;
+
+      if (info.can_reconstruct && confirm(message)) {
+        // Trigger the actual download
+        const response = await reconstructFile(fileId);
+        
+        // Create download link
+        const blob = new Blob([response.data]);
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = info.filename || `reconstructed_${fileId}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        
+        // Show success message
+        alert(`File "${info.filename}" downloaded successfully!`);
+      } else if (!info.can_reconstruct) {
+        alert(message);
+      }
     } catch (err: any) {
       setReconstructError(err.response?.data?.detail || "Failed to reconstruct file");
     } finally {

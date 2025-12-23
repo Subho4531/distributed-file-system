@@ -3,7 +3,8 @@ import { useParams, Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   fetchFileStatus,
-  reconstructFile
+  reconstructFile,
+  getReconstructInfo
 } from "../api/cosmeon";
 import type { FileStatusResponse } from "../types/file";
 import ShardMap from "../components/ShardMap";
@@ -53,10 +54,53 @@ export default function FileDetails() {
     setReconstructResult(null);
 
     try {
-      const res = await reconstructFile(fileId);
-      setReconstructResult(res);
-    } catch {
-      setReconstructResult({ error: "Quantum parity reconstruction failed" });
+      // First get reconstruction info
+      const info = await getReconstructInfo(fileId);
+      
+      // Show alert with reconstruction details
+      const message = `File Reconstruction Details:
+      
+Filename: ${info.filename}
+Algorithm: ${info.algorithm.toUpperCase()}
+Total Shards: ${info.total_shards}
+Available Shards: ${info.available_shards}
+Needed Shards: ${info.needed_shards}
+Missing Shards: ${info.missing_shards.length}
+Original Size: ${(info.original_size / 1024).toFixed(2)} KB
+
+${info.can_reconstruct ? 'File can be reconstructed successfully!' : 'Cannot reconstruct - insufficient shards available.'}
+
+Click OK to download the reconstructed file.`;
+
+      if (info.can_reconstruct && confirm(message)) {
+        // Trigger the actual download
+        const response = await reconstructFile(fileId);
+        
+        // Create download link
+        const blob = new Blob([response.data]);
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = info.filename || `reconstructed_${fileId}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        
+        // Show success message and set result for UI
+        alert(`File "${info.filename}" downloaded successfully!`);
+        setReconstructResult({
+          filename: info.filename,
+          reconstructed_size: info.original_size,
+          missing_shards: info.missing_shards,
+          reconstruction_time: new Date().toISOString()
+        });
+      } else if (!info.can_reconstruct) {
+        alert(message);
+        setReconstructResult({ error: "Cannot reconstruct - insufficient shards available" });
+      }
+    } catch (err: any) {
+      setReconstructResult({ error: err.response?.data?.detail || "Quantum parity reconstruction failed" });
     } finally {
       setReconstructing(false);
     }

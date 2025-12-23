@@ -40,11 +40,22 @@ export async function fetchFileStatus(fileId: string) {
 }
 
 // --------------------
-// Reconstruct file
+// Reconstruct file info
+// --------------------
+export async function getReconstructInfo(fileId: string) {
+  const res = await cosmeonAPI.get(`/file/${fileId}/reconstruct-info`);
+  return res.data;
+}
+
+// --------------------
+// Reconstruct and download file
 // --------------------
 export async function reconstructFile(fileId: string) {
-  const res = await cosmeonAPI.get(`/file/${fileId}/reconstruct`);
-  return res.data;
+  // This will trigger the actual download
+  const response = await cosmeonAPI.get(`/file/${fileId}/reconstruct`, {
+    responseType: 'blob'
+  });
+  return response;
 }
 
 // --------------------

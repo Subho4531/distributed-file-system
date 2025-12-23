@@ -113,11 +113,8 @@ class SmartStorageEngine:
         else:
             # For medium and large files, prefer Reed-Solomon with compression
             algorithm = "reed-solomon"
-            # Use slightly different k/m for very large files if critical
-            if metadata.is_critical or metadata.size > 1_000_000_000:
-                config = {"k": 3, "m": 3, "compress": True}
-            else:
-                config = {"k": 4, "m": 2, "compress": True}
+            # Always use (3,2) Reed-Solomon configuration
+            config = {"k": 3, "m": 2, "compress": True}
 
         cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
         return {
@@ -133,14 +130,10 @@ class SmartStorageEngine:
         if metadata.size < 10_000_000:  # < 10MB
             algorithm = "replication"
             config = {"replication_factor": 3, "compress": False}
-        # Medium files: Reed-Solomon (good balance)
-        elif metadata.size < 1_000_000_000:  # < 1GB
-            algorithm = "reed-solomon"
-            config = {"k": 4, "m": 2, "compress": False}  # 50% overhead, can recover from 2 failures
-        # Large files: Reed-Solomon without compression for balanced policy
+        # Medium and large files: Reed-Solomon (3,2) configuration
         else:
             algorithm = "reed-solomon"
-            config = {"k": 4, "m": 2, "compress": False}  # No compression in balanced mode
+            config = {"k": 3, "m": 2, "compress": False}  # 1.67x overhead, can recover from 2 failures
         
         cost = self._estimate_cost(algorithm, metadata, compress=config.get("compress", False))
         
@@ -168,11 +161,8 @@ class SmartStorageEngine:
             return {"replication_factor": factor, "compress": bool(metadata.is_compressible)}
         
         elif algorithm == "reed-solomon":
-            # More parity blocks for critical/large files
-            if metadata.is_critical or metadata.size > 500_000_000:
-                return {"k": 3, "m": 3, "compress": True}
-            else:
-                return {"k": 4, "m": 2, "compress": bool(metadata.is_compressible)}
+            # Always use (3,2) Reed-Solomon configuration
+            return {"k": 3, "m": 2, "compress": bool(metadata.is_compressible)}
         
         # XOR-parity removed; unsupported algorithm will raise below
         

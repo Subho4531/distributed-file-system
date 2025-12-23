@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import uuid
@@ -8,6 +9,7 @@ from datetime import datetime
 import tempfile
 import os
 import zlib
+import io
 
 from storage_manager import SupabaseStorageManager
 from smart_engine import SmartStorageEngine
@@ -288,19 +290,35 @@ def _encode_file(contents: bytes, decision: dict) -> List[bytes]:
         raise HTTPException(400, f"Unknown algorithm: {algorithm}")
 
 def _distribute_shards(shard_data_list: List[bytes], file_id: str) -> List[dict]:
-    """Distribute shards across storage nodes"""
+    """Distribute shards across storage nodes (one shard per node for Reed-Solomon)"""
     shard_metadata = []
-    for i, shard_data in enumerate(shard_data_list):
-        bucket_index = i % len(storage.buckets)
-        bucket_name = storage.buckets[bucket_index]
-        
-        shard_info = storage.upload_shard(
-            bucket_name=bucket_name,
-            shard_data=shard_data,
-            file_id=file_id,
-            shard_index=i
-        )
-        shard_metadata.append(shard_info)
+    
+    # For Reed-Solomon (3,2), we should have exactly 5 shards
+    if len(shard_data_list) == 5 and len(storage.buckets) >= 5:
+        # Distribute one shard per node for optimal fault tolerance
+        for i, shard_data in enumerate(shard_data_list):
+            bucket_name = storage.buckets[i]  # Use node i for shard i
+            
+            shard_info = storage.upload_shard(
+                bucket_name=bucket_name,
+                shard_data=shard_data,
+                file_id=file_id,
+                shard_index=i
+            )
+            shard_metadata.append(shard_info)
+    else:
+        # Fallback to round-robin distribution for other cases
+        for i, shard_data in enumerate(shard_data_list):
+            bucket_index = i % len(storage.buckets)
+            bucket_name = storage.buckets[bucket_index]
+            
+            shard_info = storage.upload_shard(
+                bucket_name=bucket_name,
+                shard_data=shard_data,
+                file_id=file_id,
+                shard_index=i
+            )
+            shard_metadata.append(shard_info)
     
     return shard_metadata
 
@@ -386,6 +404,9 @@ async def get_file_status(file_id: str):
 @app.get("/file/{file_id}/reconstruct", tags=["Files"])
 async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
     """Reconstruct and download a file from distributed shards"""
+    from fastapi.responses import StreamingResponse
+    import io
+    
     metadata = storage.get_metadata(file_id)
     if not metadata:
         raise HTTPException(404, f"File {file_id} not found")
@@ -444,27 +465,80 @@ async def reconstruct_file(file_id: str, background_tasks: BackgroundTasks):
         if config.get("compress"):
             reconstructed = decompress_bytes(reconstructed)
 
-        # Save to temporary file
-        temp_dir = tempfile.gettempdir()
-        temp_filename = os.path.join(temp_dir, f"reconstructed_{file_id}_{metadata.get('filename', 'file')}")
+        # Create a file-like object from the reconstructed data
+        file_like = io.BytesIO(reconstructed)
         
-        with open(temp_filename, "wb") as f:
-            f.write(reconstructed)
+        # Get the original filename
+        filename = metadata.get("filename", f"reconstructed_{file_id}")
         
-        # Schedule cleanup
-        background_tasks.add_task(cleanup_temp_file, temp_filename)
-        
-        return {
-            "file_id": file_id,
-            "filename": metadata.get("filename", "unknown"),
-            "reconstructed_size": len(reconstructed),
-            "missing_shards": missing_indices,
-            "reconstruction_time": datetime.utcnow().isoformat(),
-            "temp_path": temp_filename
-        }
+        # Return the file as a streaming download
+        return StreamingResponse(
+            io.BytesIO(reconstructed),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{filename}\"",
+                "Content-Length": str(len(reconstructed))
+            }
+        )
         
     except Exception as e:
         raise HTTPException(500, f"Reconstruction failed: {str(e)}")
+
+@app.get("/file/{file_id}/reconstruct-info", tags=["Files"])
+async def get_reconstruct_info(file_id: str):
+    """Get reconstruction information without downloading the file"""
+    metadata = storage.get_metadata(file_id)
+    if not metadata:
+        raise HTTPException(404, f"File {file_id} not found")
+    
+    # Check shard availability
+    missing_indices = []
+    available_shards = 0
+    
+    for i, shard_info in enumerate(metadata["shards"]):
+        shard_bucket = shard_info.get("bucket", "")
+        
+        # Check if this shard's node is simulated as failed
+        if node_simulator.is_node_failed(shard_bucket):
+            missing_indices.append(i)
+        else:
+            try:
+                # Quick check if shard is accessible
+                import httpx
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.head(shard_info["url"])
+                    if response.status_code == 200:
+                        available_shards += 1
+                    else:
+                        missing_indices.append(i)
+            except:
+                missing_indices.append(i)
+    
+    # Determine if reconstruction is possible
+    algorithm = metadata.get("algorithm_used") or metadata.get("algorithm")
+    config = metadata.get("algorithm_config") or metadata.get("config", {})
+    
+    if algorithm == "replication":
+        needed_shards = 1
+    elif algorithm == "reed-solomon":
+        needed_shards = config.get("k", 3)
+    else:
+        needed_shards = 1
+    
+    can_reconstruct = available_shards >= needed_shards
+    
+    return {
+        "file_id": file_id,
+        "filename": metadata.get("filename", "unknown"),
+        "algorithm": algorithm,
+        "total_shards": len(metadata["shards"]),
+        "available_shards": available_shards,
+        "missing_shards": missing_indices,
+        "needed_shards": needed_shards,
+        "can_reconstruct": can_reconstruct,
+        "original_size": metadata.get("original_size", 0),
+        "download_url": f"/file/{file_id}/reconstruct"
+    }
 
 @app.delete("/file/{file_id}", tags=["Files"])
 async def delete_file(file_id: str):
